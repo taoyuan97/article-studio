@@ -33,6 +33,11 @@ export interface RunStreamHandlers<TEventType extends string> {
   onEvent: (type: TEventType, data: RunEventData, source: EventSource) => void
   /** 网络断开回调（连接已主动/正常关闭时不触发） */
   onNetworkError?: () => void
+  /**
+   * 连接建立回调（含断线自动重连）。
+   * 后端事件流从头部重放，重连时应先清空临时流式内容再由重放事件重建。
+   */
+  onOpen?: () => void
 }
 
 export interface RunStreamHandle {
@@ -81,6 +86,8 @@ function connectRunStream<TEventType extends string>(
       }
     })
   }
+
+  source.onopen = () => handlers.onOpen?.()
 
   source.onerror = () => {
     // readyState === CLOSED 说明连接已被关闭（正常结束或手动 close()），
