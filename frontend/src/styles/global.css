@@ -624,6 +624,168 @@ body {
   color: rgba(5, 5, 5, 0.65);
 }
 
+/* ---------- 首页仪表盘 ---------- */
+
+.dashboard-subtitle {
+  margin: 0;
+  font-size: 13px;
+  color: rgba(5, 5, 5, 0.55);
+}
+
+.dashboard-actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.dashboard-action-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 18px 20px;
+  font: inherit;
+  text-align: left;
+  background: #ffffff;
+  border: 1px solid rgba(5, 5, 5, 0.06);
+  border-radius: 10px;
+  cursor: pointer;
+  transition:
+    border-color 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.dashboard-action-card:hover:not(:disabled) {
+  border-color: #2f54eb;
+  box-shadow: 0 2px 8px rgba(47, 84, 235, 0.12);
+}
+
+.dashboard-action-card:disabled {
+  cursor: default;
+  opacity: 0.72;
+}
+
+.dashboard-action-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: rgba(5, 5, 5, 0.88);
+}
+
+.dashboard-action-desc {
+  font-size: 12px;
+  color: rgba(5, 5, 5, 0.45);
+}
+
+.dashboard-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.dashboard-stat-card .ant-card-body {
+  padding: 16px 20px;
+}
+
+.dashboard-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.dashboard-stat-value {
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.dashboard-stat-label {
+  font-size: 12px;
+  color: rgba(5, 5, 5, 0.45);
+}
+
+.dashboard-stat-link {
+  margin-top: 4px;
+  padding: 0;
+  height: auto;
+  font-size: 12px;
+}
+
+.dashboard-recent {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+
+.dashboard-empty {
+  padding: 32px 8px;
+}
+
+.dashboard-recent-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.dashboard-recent-list li + li {
+  border-top: 1px solid rgba(5, 5, 5, 0.05);
+}
+
+.dashboard-recent-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 4px;
+  font: inherit;
+  text-align: left;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.dashboard-recent-item:hover .dashboard-recent-title {
+  color: #2f54eb;
+}
+
+.dashboard-recent-thumb {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #f5f6f8;
+}
+
+.dashboard-recent-thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.dashboard-recent-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  color: rgba(5, 5, 5, 0.88);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: color 0.2s ease;
+}
+
+.dashboard-recent-time {
+  flex: none;
+  font-size: 12px;
+  color: rgba(5, 5, 5, 0.45);
+}
+
 /* ---------- 素材库 ---------- */
 
 .asset-grid {

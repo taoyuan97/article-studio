@@ -26,6 +26,15 @@ pnpm build        # tsc -b + vite build，产物 → dist/
 pnpm lint         # ESLint（typescript-eslint + react-hooks）
 pnpm format       # Prettier 格式化
 pnpm preview      # 本地预览 dist 构建产物
+pnpm test         # Vitest 组件测试（jsdom + Testing Library）
+pnpm e2e          # 先 build，再跑 Playwright E2E（假模型后端，生产形态）
+```
+
+E2E 首次运行前需安装浏览器到项目本地目录（详见根 README「E2E」一节）：
+
+```powershell
+$env:PLAYWRIGHT_BROWSERS_PATH = "<repo>\.playwright-browsers"
+pnpm exec playwright install chromium
 ```
 
 ## 目录说明
@@ -49,10 +58,13 @@ src/
 ├─ layouts/
 │  ├─ AppLayout.tsx   # 侧边导航壳（首页/文章/素材，aria-current 高亮）
 │  └─ FocusLayout.tsx # 专注模式布局（顶部返回链接 + 全宽内容）
-├─ pages/             # 路由级页面（T002 为占位，T003–T005 填充业务）
+├─ pages/             # 路由级页面（仪表盘 / 文章列表 / 文章工作台 / 配图工作台 / 素材库）
 ├─ components/        # 跨模块通用组件（MarkdownView / StatusBanner）
+├─ test/              # Vitest 设置（jsdom + Testing Library 清理）
 └─ styles/            # 主题 tokens（tokens.ts）与全局样式（global.css）
 ```
+
+组件测试与源码同目录（`*.test.ts(x)`，仅收集 `src/`）；Playwright E2E 用例在 `e2e/`（MVP 场景 A–G、配图/素材主路径、部署与重启恢复）。
 
 ## 与后端的契约
 

@@ -1,8 +1,9 @@
-# 工具链本地缓存（corepack/pnpm/uv），不入库
+# 工具链本地缓存（corepack/pnpm/uv/playwright），不入库
 .corepack/
 .pnpm-cache/
 .pnpm-store/
 .uv-cache/
+.playwright-browsers/
 
 # 各工程自身忽略规则见 frontend/.gitignore、backend/.gitignore
 

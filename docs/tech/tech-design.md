@@ -3,7 +3,7 @@
 ## 1. 文档信息
 
 - 版本：v1.0
-- 状态：待评审
+- 状态：已实施（T001–T006 全部完成，实施与设计一致）
 - 创建日期：2026-08-23
 - 关联文档：`docs/prd/prd.md`（产品需求）、`docs/task/`（任务拆分：T001–T006）
 - 迁移源：`prototype/article-agent-mvp/backend`（契约基准：`backend/tests/test_frontend_contract.py`）

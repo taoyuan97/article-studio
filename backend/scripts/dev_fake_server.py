@@ -5,8 +5,10 @@ data_dir）挂载假 LLM 与假生图 provider，其余 API、SSE、SQLite 行�
 
 假模型行为约定（便于联调时构造场景）：
 - 文章：第 1 条消息 → GENERATE（生成 v1）；后续消息 → REVISE（生成下一版）。
-- 用户消息包含「失败」→ 该次运行抛错，用于验证失败卡片与重新发送。
-- 生图：提示词包含「失败」→ 生成失败，用于验证失败卡片。
+- 最新用户消息包含「触发失败」→ 生成阶段延迟 0.5s 后抛错（错误详情含
+  SIMULATED_FAILURE，用于验证失败卡片与重新发送；历史消息与压缩转录中的
+  「失败」字样不影响运行——正文模板本身含「失败」二字，故用更长的触发词）。
+- 生图：提示词包含「触发失败」→ 延迟后生成失败，用于验证失败卡片。
 
 用法（backend 目录下）：
 
@@ -91,11 +93,12 @@ def _make_png(width: int, height: int, rgb: tuple[int, int, int]) -> bytes:
     )
 
 
-def _contains_failure_keyword(messages: list) -> bool:
-    for message in messages:
-        if getattr(message, "type", "") == "human" and "失败" in str(message.content):
-            return True
-    return False
+def _latest_human_text(messages: list) -> str:
+    """取最新一条用户消息文本（失败注入只看当前指令，历史不影响后续运行）。"""
+    for message in reversed(messages):
+        if getattr(message, "type", "") == "human":
+            return str(message.content)
+    return ""
 
 
 class _ScriptedStructuredModel:
@@ -103,8 +106,6 @@ class _ScriptedStructuredModel:
         self.parent = parent
 
     async def ainvoke(self, messages: list, config: dict | None = None):
-        if _contains_failure_keyword(messages):
-            raise RuntimeError("模拟的提供方错误：SIMULATED_FAILURE（已脱敏）")
         intent = (
             UserIntent.GENERATE if self.parent.generation_count == 0 else UserIntent.REVISE
         )
@@ -126,11 +127,17 @@ class ScriptedFakeChatModel:
         return ARTICLE_TEMPLATE.format(n=self.generation_count)
 
     async def ainvoke(self, messages: list, config: dict | None = None):
+        if "触发失败" in _latest_human_text(messages):
+            await asyncio.sleep(0.5)
+            raise RuntimeError("模拟的提供方错误：SIMULATED_FAILURE（已脱敏）")
         return AIMessage(content=self._next_article())
 
     async def astream(
         self, messages: list, config: dict | None = None
     ) -> AsyncIterator[AIMessageChunk]:
+        if "触发失败" in _latest_human_text(messages):
+            await asyncio.sleep(0.5)
+            raise RuntimeError("模拟的提供方错误：SIMULATED_FAILURE（已脱敏）")
         text = self._next_article()
         for index in range(0, len(text), 12):
             if self.chunk_delay:
@@ -150,7 +157,9 @@ class ScriptedFakeImageProvider:
         self.calls = 0
 
     async def generate(self, prompt: str, *, size: str | None = None) -> ImageResult:
-        if "失败" in prompt:
+        # 失败注入前先延迟 0.5s（与假聊天模型一致），保证 UI 能观测到「正在生成」中间态
+        if "触发失败" in prompt:
+            await asyncio.sleep(0.5)
             raise ImageProviderError("模拟的生图错误：SIMULATED_FAILURE（已脱敏）")
         await asyncio.sleep(self.delay)
         self.calls += 1
@@ -184,7 +193,13 @@ class ScriptedFakeImageProvider:
         )
 
 
-def build_application(data_dir: Path, *, chunk_delay: float, image_delay: float) -> object:
+def build_application(
+    data_dir: Path,
+    *,
+    chunk_delay: float,
+    image_delay: float,
+    serve_frontend: bool = False,
+) -> object:
     settings = Settings(
         _env_file=None,
         default_llm_provider="deepseek",
@@ -196,6 +211,7 @@ def build_application(data_dir: Path, *, chunk_delay: float, image_delay: float)
         moonshot_context_window=None,
         default_image_provider=None,
         data_dir=data_dir,
+        serve_frontend=serve_frontend,
     )
     registry = ModelRegistry()
     for provider in ("deepseek", "moonshot"):

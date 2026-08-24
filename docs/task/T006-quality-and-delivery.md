@@ -2,7 +2,7 @@
 
 ## 1. 任务信息
 
-- 状态：待实施
+- 状态：已完成
 - 优先级：P0
 - 类型：正式任务 6/6
 - 前置任务：T001、T002、T003、T004、T005
@@ -60,15 +60,15 @@
 
 ## 5. 验收标准
 
-- [ ] Vitest 组件测试全部通过，覆盖 MarkdownView/MessageList/SSE hooks/ModelSelect。
-- [ ] 安全渲染有断言用例（恶意 HTML 输入不执行）。
-- [ ] Playwright E2E 覆盖 MVP 场景 A–G + 配图/素材主路径，全部通过。
-- [ ] E2E 不依赖真实 API Key（假模型）。
-- [ ] 单进程 `uvicorn` 启动后全功能可用。
-- [ ] 深链路由刷新不 404；SSE 流式无缓冲延迟。
-- [ ] PRD 第 9 节产品级验收逐条通过。
-- [ ] 根 README 与后端 README 完整准确。
-- [ ] `prototype/` 目录未被改动。
+- [x] Vitest 组件测试全部通过，覆盖 MarkdownView/MessageList/SSE hooks/ModelSelect。
+- [x] 安全渲染有断言用例（恶意 HTML 输入不执行）。
+- [x] Playwright E2E 覆盖 MVP 场景 A–G + 配图/素材主路径，全部通过。
+- [x] E2E 不依赖真实 API Key（假模型）。
+- [x] 单进程 `uvicorn` 启动后全功能可用。
+- [x] 深链路由刷新不 404；SSE 流式无缓冲延迟。
+- [x] PRD 第 9 节产品级验收逐条通过。
+- [x] 根 README 与后端 README 完整准确。
+- [x] `prototype/` 目录未被改动。
 
 ## 6. 完成定义
 

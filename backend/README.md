@@ -92,6 +92,18 @@ uv run python scripts/test_real_image_providers.py
 
 需要在 `.env` 配置对应供应商密钥。
 
+## 假模型服务器（不消耗真实 API 额度）
+
+```powershell
+# 前端联调：假 LLM + 假生图，API/SSE/SQLite 行为与真实后端完全一致
+uv run python scripts/dev_fake_server.py [--port 8000] [--data-dir data/dev-fake]
+
+# E2E 专用：同上，但 SERVE_FRONTEND=true 单进程托管 frontend/dist（生产形态），--wipe 清空数据
+.venv/Scripts/python.exe scripts/e2e_server.py --port 8901 --wipe
+```
+
+假模型行为约定（便于构造场景）：最新用户消息含「触发失败」→ 该次运行延迟 0.5s 后失败（错误详情含 SIMULATED_FAILURE）；生图提示词含「触发失败」→ 同样延迟 0.5s 后失败。触发词用「触发失败」而非「失败」，避免正文模板与压缩摘要中的「失败」字样误触发。数据写入独立目录，删除即可重置。
+
 ## 核心与持久化边界（迁移自 MVP，未改动）
 
 - `ArticleAgent.stream()` 只发出 `assistant.delta`、`article.delta`、`result.ready`、`run.cancelled`、`run.failed`、`run.completed`；版本事务仅在 `result.ready` 后开启。
