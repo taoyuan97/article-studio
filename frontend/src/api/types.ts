@@ -250,6 +250,86 @@ export interface AssetListResponse {
   items: Asset[]
 }
 
+// ---------- 发布线 ----------
+
+/** GET /api/publish/themes 主题项 */
+export interface PublishTheme {
+  id: string
+  name: string
+  description: string
+}
+
+export interface PublishThemeListResponse {
+  items: PublishTheme[]
+}
+
+/**
+ * 小节切分结果（按 H2 切分，1 起始索引对应 after_section_{n}）；
+ * heading 为 null 表示首节（第一个 H2 之前的内容）。
+ */
+export interface PublishSection {
+  index: number
+  heading: string | null
+  body: string
+}
+
+/**
+ * 图片插入位置：`top`（文首）/ `bottom`（文末）/ `after_section_{n}`（第 n 节之后）；
+ * 同一 position 内按 order 升序排列。
+ */
+export interface ImagePlacement {
+  asset_id: string
+  position: string
+  order: number
+}
+
+/** POST /api/publish/preview 响应 */
+export interface PublishPreviewResponse {
+  sections: PublishSection[]
+  markdown: string
+}
+
+/** POST /api/publish/articles/{id} 响应 */
+export interface PublishArticleResponse {
+  publish_id: string
+  media_id: string
+  status: 'succeeded'
+}
+
+export type PublishStatus = 'succeeded' | 'failed'
+
+/** GET /api/publish/records 列表项与 /api/publish/records/{id} 详情（联表含 article_title） */
+export interface PublishRecord {
+  id: string
+  article_id: string
+  version_id: string | null
+  theme_id: string
+  cover_asset_id: string | null
+  author: string | null
+  digest: string | null
+  image_placements: ImagePlacement[]
+  status: PublishStatus
+  media_id: string | null
+  error_code: string | null
+  error_message: string | null
+  content_snapshot: string
+  created_at: string
+  article_title: string | null
+}
+
+export interface PublishRecordListResponse {
+  items: PublishRecord[]
+}
+
+/** preview / publish 共用的组装参数 */
+export interface PublishAssemblyInput {
+  version_id?: string | null
+  image_placements: ImagePlacement[]
+  cover_asset_id?: string | null
+  author?: string | null
+  digest?: string | null
+}
+
 // ---------- 统计 ----------
 
 export interface RecentArticle {

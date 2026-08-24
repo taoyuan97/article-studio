@@ -143,6 +143,23 @@ CREATE TABLE IF NOT EXISTS assets (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS publish_records (
+    id TEXT PRIMARY KEY,
+    article_id TEXT NOT NULL REFERENCES articles(id),
+    version_id TEXT REFERENCES article_versions(id),
+    theme_id TEXT NOT NULL,
+    cover_asset_id TEXT REFERENCES assets(id),
+    author TEXT,
+    digest TEXT,
+    image_placements_json TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('succeeded','failed')),
+    media_id TEXT,
+    error_code TEXT,
+    error_message TEXT,
+    content_snapshot TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_articles_updated ON articles(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_messages_conversation_sequence ON messages(conversation_id, sequence_number);
 CREATE INDEX IF NOT EXISTS idx_versions_article_number ON article_versions(article_id, version_number DESC);
@@ -153,6 +170,7 @@ CREATE INDEX IF NOT EXISTS idx_image_messages_session ON image_generation_messag
 CREATE INDEX IF NOT EXISTS idx_image_runs_session_status ON image_runs(session_id, status);
 CREATE INDEX IF NOT EXISTS idx_assets_kind_updated ON assets(kind, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_assets_source_session ON assets(source_session_id);
+CREATE INDEX IF NOT EXISTS idx_publish_records_article ON publish_records(article_id, created_at DESC);
 """
 
 
@@ -1228,3 +1246,93 @@ class Repository:
         item = dict(row)
         item["metadata"] = json.loads(item.pop("metadata_json") or "{}")
         return item
+
+    _PUBLISH_RECORD_COLUMNS = """p.id,p.article_id,p.version_id,p.theme_id,p.cover_asset_id,
+                          p.author,p.digest,p.image_placements_json,p.status,p.media_id,
+                          p.error_code,p.error_message,p.content_snapshot,p.created_at,
+                          a.title AS article_title"""
+
+    @staticmethod
+    def _publish_record(row: sqlite3.Row) -> dict[str, Any]:
+        item = dict(row)
+        item["image_placements"] = json.loads(item.pop("image_placements_json") or "[]")
+        return item
+
+    def create_publish_record(
+        self,
+        *,
+        article_id: str,
+        version_id: str | None,
+        theme_id: str,
+        cover_asset_id: str | None,
+        author: str | None,
+        digest: str | None,
+        image_placements: list[dict[str, Any]],
+        status: str,
+        content_snapshot: str,
+        media_id: str | None = None,
+        error_code: str | None = None,
+        error_message: str | None = None,
+    ) -> dict[str, Any]:
+        record_id = str(uuid4())
+        with self.transaction() as connection:
+            article = connection.execute(
+                "SELECT id FROM articles WHERE id=?", (article_id,)
+            ).fetchone()
+            if article is None:
+                raise NotFoundError("文章不存在")
+            connection.execute(
+                """INSERT INTO publish_records
+                   (id,article_id,version_id,theme_id,cover_asset_id,author,digest,
+                    image_placements_json,status,media_id,error_code,error_message,
+                    content_snapshot,created_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    record_id,
+                    article_id,
+                    version_id,
+                    theme_id,
+                    cover_asset_id,
+                    author,
+                    digest,
+                    json.dumps(image_placements, ensure_ascii=False),
+                    status,
+                    media_id,
+                    error_code,
+                    error_message,
+                    content_snapshot,
+                    now_iso(),
+                ),
+            )
+        return self.get_publish_record(record_id)
+
+    def list_publish_records(
+        self, article_id: str | None = None, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        params: list[Any] = []
+        where_clause = ""
+        if article_id:
+            where_clause = "WHERE p.article_id=?"
+            params.append(article_id)
+        params.append(limit)
+        with self.connect() as connection:
+            rows = connection.execute(
+                f"""SELECT {self._PUBLISH_RECORD_COLUMNS}
+                    FROM publish_records p LEFT JOIN articles a ON a.id=p.article_id
+                    {where_clause}
+                    ORDER BY p.created_at DESC LIMIT ?""",
+                params,
+            ).fetchall()
+        return [self._publish_record(row) for row in rows]
+
+    def get_publish_record(self, record_id: str) -> dict[str, Any]:
+        with self.connect() as connection:
+            row = connection.execute(
+                f"""SELECT {self._PUBLISH_RECORD_COLUMNS}
+                    FROM publish_records p LEFT JOIN articles a ON a.id=p.article_id
+                    WHERE p.id=?""",
+                (record_id,),
+            ).fetchone()
+        if row is None:
+            raise NotFoundError("发布记录不存在")
+        return self._publish_record(row)

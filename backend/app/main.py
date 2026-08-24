@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import re
 from contextlib import asynccontextmanager
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -14,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from article_agent.agent import ArticleAgent
@@ -25,7 +27,9 @@ from article_agent.registry import ModelRegistry
 
 from .database import NotFoundError, Repository, RunNotActiveError
 from .image_service import ImageRunManager
+from .publish_service import build_publish_markdown, execute_publish, split_sections
 from .service import RunManager
+from .wenyan_client import PublishError, WenyanMcpClient
 
 
 class MessageCreate(BaseModel):
@@ -53,6 +57,41 @@ class AssetCreate(BaseModel):
     source_session_id: str = Field(min_length=1)
     source_message_id: str = Field(min_length=1)
     title: str = Field(min_length=0, max_length=200)
+
+
+_POSITION_PATTERN = re.compile(r"^(top|bottom|after_section_[1-9]\d*)$")
+
+
+class ImagePlacement(BaseModel):
+    asset_id: str = Field(min_length=1)
+    position: str = Field(min_length=1)
+    order: int = 0
+
+    @field_validator("position")
+    @classmethod
+    def check_position(cls, value: str) -> str:
+        if not _POSITION_PATTERN.match(value):
+            raise ValueError("position 必须是 top、bottom 或 after_section_{n}（n>=1）")
+        return value
+
+
+class PublishPreviewRequest(BaseModel):
+    article_id: str = Field(min_length=1)
+    version_id: str | None = None
+    image_placements: list[ImagePlacement] = Field(default_factory=list)
+    cover_asset_id: str | None = None
+    author: str | None = None
+    digest: str | None = None
+
+
+class PublishCreateRequest(BaseModel):
+    version_id: str | None = None
+    theme_id: str = Field(min_length=1)
+    image_placements: list[ImagePlacement] = Field(default_factory=list)
+    cover_asset_id: str | None = None
+    author: str | None = None
+    digest: str | None = None
+    edited_markdown: str | None = None
 
 
 def _error(code: str, message: str, http_status: int) -> HTTPException:
@@ -166,6 +205,10 @@ def create_app(
         application.state.repository = repository
         application.state.manager = manager
         application.state.image_manager = image_manager
+        application.state.wenyan_client = WenyanMcpClient(
+            resolved_settings, data_dir=resolved_data_dir
+        )
+        application.state.data_dir = resolved_data_dir
         (resolved_data_dir / "assets").mkdir(parents=True, exist_ok=True)
         application.mount(
             "/static/assets",
@@ -219,6 +262,23 @@ def create_app(
         return JSONResponse(
             status_code=409,
             content={"error": {"code": code, "message": str(exc)}},
+        )
+
+    _PUBLISH_ERROR_STATUS: dict[str, int] = {
+        "PUBLISH_CREDENTIALS_MISSING": 422,
+        "PUBLISH_NO_CONTENT": 422,
+        "PUBLISH_MCP_NOT_INSTALLED": 500,
+        "PUBLISH_MCP_ERROR": 502,
+        "PUBLISH_TIMEOUT": 504,
+    }
+
+    @application.exception_handler(PublishError)
+    async def handle_publish_error(_request: Request, exc: PublishError):
+        from fastapi.responses import JSONResponse
+
+        return JSONResponse(
+            status_code=_PUBLISH_ERROR_STATUS.get(exc.code, 400),
+            content={"error": {"code": exc.code, "message": exc.message}},
         )
 
     @application.exception_handler(HTTPException)
@@ -495,6 +555,98 @@ def create_app(
     @application.get("/api/assets/{asset_id}")
     async def get_asset(asset_id: str, request: Request):
         return repository(request).get_asset(asset_id)
+
+    def wenyan_client(request: Request) -> WenyanMcpClient:
+        return request.app.state.wenyan_client
+
+    def collect_assets(
+        request: Request, placements: list[ImagePlacement], cover_asset_id: str | None
+    ) -> dict[str, dict[str, Any]]:
+        asset_ids = {item.asset_id for item in placements}
+        if cover_asset_id:
+            asset_ids.add(cover_asset_id)
+        assets: dict[str, dict[str, Any]] = {}
+        for asset_id in asset_ids:
+            try:
+                assets[asset_id] = repository(request).get_asset(asset_id)
+            except NotFoundError:
+                raise PublishError(
+                    "PUBLISH_ASSET_MISSING", f"图片素材不存在：{asset_id}"
+                ) from None
+        return assets
+
+    def resolve_version(
+        request: Request, article_id: str, version_id: str | None
+    ) -> dict[str, Any]:
+        article = repository(request).get_article(article_id)
+        resolved_version_id = version_id or article.get("current_version_id")
+        if not resolved_version_id:
+            raise PublishError(
+                "PUBLISH_NO_CONTENT", "该文章尚无可用版本，请先生成文章内容。"
+            )
+        return repository(request).get_version(article_id, resolved_version_id)
+
+    @application.get("/api/publish/themes")
+    async def list_publish_themes(request: Request):
+        themes = await wenyan_client(request).list_themes()
+        return {"items": themes}
+
+    @application.post("/api/publish/preview")
+    async def publish_preview(payload: PublishPreviewRequest, request: Request):
+        article = repository(request).get_article(payload.article_id)
+        version = resolve_version(request, payload.article_id, payload.version_id)
+        placements = [item.model_dump() for item in payload.image_placements]
+        assets = collect_assets(request, payload.image_placements, payload.cover_asset_id)
+        markdown = build_publish_markdown(
+            title=version["title"] or article["title"],
+            content_markdown=version["content_markdown"],
+            image_placements=placements,
+            assets=assets,
+            cover_asset_id=payload.cover_asset_id,
+            author=payload.author,
+            data_dir=request.app.state.data_dir,
+        )
+        return {"sections": split_sections(version["content_markdown"]), "markdown": markdown}
+
+    @application.post("/api/publish/articles/{article_id}")
+    async def publish_article(article_id: str, payload: PublishCreateRequest, request: Request):
+        try:
+            return await asyncio.wait_for(
+                execute_publish(
+                    repository=repository(request),
+                    client=wenyan_client(request),
+                    article_id=article_id,
+                    theme_id=payload.theme_id,
+                    version_id=payload.version_id,
+                    image_placements=[item.model_dump() for item in payload.image_placements],
+                    cover_asset_id=payload.cover_asset_id,
+                    author=payload.author,
+                    digest=payload.digest,
+                    edited_markdown=payload.edited_markdown,
+                    data_dir=request.app.state.data_dir,
+                ),
+                timeout=120,
+            )
+        except TimeoutError:
+            raise PublishError(
+                "PUBLISH_TIMEOUT", "发布超时（120s），请稍后在发布记录中查看结果。"
+            ) from None
+
+    @application.get("/api/publish/records")
+    async def list_publish_records(
+        request: Request,
+        article_id: str | None = None,
+        limit: int = Query(default=100, ge=1, le=100),
+    ):
+        return {
+            "items": repository(request).list_publish_records(
+                article_id=article_id, limit=limit
+            )
+        }
+
+    @application.get("/api/publish/records/{record_id}")
+    async def get_publish_record(record_id: str, request: Request):
+        return repository(request).get_publish_record(record_id)
 
     return application
 

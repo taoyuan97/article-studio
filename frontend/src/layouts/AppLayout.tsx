@@ -5,13 +5,14 @@ const NAV_ITEMS = [
   { key: '/', label: '首页' },
   { key: '/articles', label: '文章' },
   { key: '/assets', label: '素材' },
+  { key: '/publish-records', label: '发布记录' },
 ] as const
 
 /**
- * 带侧边导航的应用壳（首页 / 文章列表 / 素材库）。
+ * 带侧边导航的应用壳（首页 / 文章列表 / 素材库 / 发布记录）。
  *
- * 导航项与 MVP shell.js 对齐；当前项通过 aria-current="page" 标记，
- * 使用语义化 <nav>/<ul>/<a> 结构（AntD Layout/Sider 提供壳与栅格）。
+ * 当前项通过 aria-current="page" 标记；/publish-records/:recordId 深链同样
+ * 命中「发布记录」高亮（前缀匹配）。语义化 <nav>/<ul>/<a> 结构。
  */
 export default function AppLayout() {
   const { pathname } = useLocation()

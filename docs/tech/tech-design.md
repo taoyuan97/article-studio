@@ -2,10 +2,10 @@
 
 ## 1. 文档信息
 
-- 版本：v1.0
-- 状态：已实施（T001–T006 全部完成，实施与设计一致）
+- 版本：v1.1
+- 状态：已实施（T001–T010 全部完成；v1.1 补记 T007–T010 公众号发布线设计）
 - 创建日期：2026-08-23
-- 关联文档：`docs/prd/prd.md`（产品需求）、`docs/task/`（任务拆分：T001–T006）
+- 关联文档：`docs/prd/prd.md`（产品需求）、`docs/task/`（任务拆分：T001–T010）
 - 迁移源：`prototype/article-agent-mvp/backend`（契约基准：`backend/tests/test_frontend_contract.py`）
 
 ## 2. 总体架构
@@ -182,6 +182,18 @@ GET    /api/assets?kind=image&limit=100             素材列表
 GET    /api/assets/{id}                             素材详情
 ```
 
+发布线（T007–T009，同步请求、无 SSE；发布路由层超时 120s 与前端 `timeoutMs` 对齐）：
+
+```text
+GET    /api/publish/themes                          主题列表（wenyan 内置主题）
+POST   /api/publish/preview                         组装预览（按 H2 切分 sections + 组装 markdown，不发布）
+POST   /api/publish/articles/{article_id}           发布到公众号草稿箱 → 200 {publish_id, media_id, status}
+GET    /api/publish/records?article_id=             发布记录列表（时间倒序，联表含 article_title）
+GET    /api/publish/records/{record_id}             发布记录详情（含 content_snapshot）
+```
+
+发布线错误为结构化 `{code, message}`（如 `PUBLISH_CREDENTIALS_MISSING` / `PUBLISH_MCP_NOT_INSTALLED` / `PUBLISH_MCP_ERROR`（40164 等）/ `PUBLISH_TIMEOUT` / `PUBLISH_ASSET_MISSING`），失败同样落 `publish_records`（status=failed + 错误码/信息）供回看与排障。
+
 run 响应结构（两条线同构）：
 
 ```json
@@ -221,9 +233,10 @@ run 响应结构（两条线同构）：
 
 ### 5.4 数据存储
 
-- `data/article.sqlite3`：articles、conversations、messages、article_versions、generation_runs、image_generation_sessions、image_generation_messages、image_runs、assets。
+- `data/article.sqlite3`：articles、conversations、messages、article_versions、generation_runs、image_generation_sessions、image_generation_messages、image_runs、assets、publish_records（T008：发布记录，含 theme/cover/author/image_placements/content_snapshot/status/media_id/error_code/error_message）。
 - `data/checkpoints.sqlite3`：LangGraph AsyncSqliteSaver。
 - `data/assets/`：图片文件。
+- `data/publish_tmp/`：发布组装 Markdown 临时文件（发布结束即删，快照持久化于 publish_records）。
 - 目录由 `DATA_DIR` 配置；正式项目数据从零开始。
 
 ### 5.5 环境配置
@@ -232,7 +245,19 @@ run 响应结构（两条线同构）：
 
 ```dotenv
 SERVE_FRONTEND=true   # 生产模式托管 frontend/dist；开发模式置 false
+
+# 发布线（T007+）
+WECHAT_APP_ID=            # 个人订阅号 AppID（mp.weixin.qq.com 基本配置）
+WECHAT_APP_SECRET=        # AppSecret；需将本机公网 IP 加入白名单
+WENYAN_MCP_COMMAND=wenyan-mcp   # 发布子进程命令（stdio MCP，按需拉起）
+PUBLISH_FAKE_MODE=false   # true 时不启动子进程、不外呼（开发/测试默认 true）
 ```
+
+### 5.6 发布线设计（T007–T009）
+
+- **`app/wenyan_client.py`**：`WenyanMcpClient` 封装 wenyan-mcp（stdio 子进程，按需拉起用完即退）；`list_themes` / `publish_article` 两个工具调用，120s 超时；子进程环境注入凭据并将 wenyan-mcp 配置目录经 `XDG_CONFIG_HOME` 重定向到 `DATA_DIR/wenyan-md/`（规避沙箱/受限令牌下 `%APPDATA%` 不可写的 EPERM）；fake 模式返回内置主题与 `FAKE_MEDIA_xxx`，凭据校验仍生效（行为与真实一致）。假模式失败注入：正文含「触发发布失败」标记 → `PUBLISH_MCP_ERROR`（40164）。
+- **`app/publish_service.py`**：组装（H2 切分 sections → 按 placements 插图 → wenyan frontmatter：title/cover/author）→ 临时文件 → 发布 → 落 `publish_records`（成功/失败均落，快照可回看）→ 临时文件即删。图片 `storage_url` 解析为本地绝对路径（wenyan-mcp 要求），缺失抛 `PUBLISH_ASSET_MISSING`。
+- **前端**：`PublishPage` 四步向导（版本和信息（文章/版本下拉、`CoverPickerModal` 封面弹窗单选（封面独立于正文配图，切文章重置/切版本保留）、作者）→ 配图与位置（分组候选墙（本文配图置顶 + 素材库图片）、round-robin 默认均分、逐图位置选择器）→ 选主题（默认 default）→ 预览编辑与发布（同步等待 120s、成功 media_id / 失败错误码映射文案可重试））；`PublishRecordsPage` 列表（状态筛选、失败展开错误、按文章过滤）；快照详情页只读渲染（frontmatter 剥离 + 本地路径图片映射回 /static + MarkdownView 白名单）。
 
 CORS：开发模式继续允许 `http://localhost:5173` / `http://127.0.0.1:5173`（Vite dev server 默认端口，兜底直连场景）；开发主路径走 Vite proxy（同源，不触发 CORS）。
 
@@ -251,8 +276,11 @@ CORS：开发模式继续允许 `http://localhost:5173` / `http://127.0.0.1:5173
 | `/` | AppLayout（侧边导航） | DashboardPage |
 | `/articles` | AppLayout | ArticleListPage |
 | `/assets` | AppLayout | AssetLibraryPage |
+| `/publish-records` | AppLayout（侧边栏第 4 项） | PublishRecordsPage |
 | `/articles/:articleId` | 专注模式（顶部返回） | ArticleWorkspacePage |
 | `/image-sessions/:sessionId` | 专注模式（顶部返回） | ImageWorkspacePage |
+| `/publish` | 专注模式（返回文章列表） | PublishPage（四步发布向导，`?article_id=` 预选） |
+| `/publish-records/:recordId` | 专注模式（返回发布记录） | PublishRecordDetailPage（快照详情） |
 
 生产模式下 BrowserRouter 需后端 SPA fallback 配合（见 5.1）。
 

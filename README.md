@@ -13,6 +13,7 @@ AI 驱动的文章创作与配图工作台：通过对话生成与修订长文�
 | 版本管理 | 每次生成落一个只读历史版本，可随时回看任意版本 |
 | 配图工作台 | 提示词生图（通义万相 / 即梦）、生成进度实时展示、档位与比例参数持久化、取消、保存素材 |
 | 素材库 | 图片素材列表、详情查看、回链来源配图会话 |
+| 发布到公众号 | 四步向导（选文章/版本 → 配图与插入位置 → 选主题 → 预览编辑）一键推送至个人公众号草稿箱（仅建草稿不群发），发布记录与内容快照可回看 |
 
 ## 环境要求
 
@@ -24,6 +25,7 @@ AI 驱动的文章创作与配图工作台：通过对话生成与修订长文�
 | Python | 3.11+ | 后端运行时 |
 | uv | 任意近期版本 | Python 依赖管理，见 [uv 安装](https://docs.astral.sh/uv/) |
 | 模型 API Key | — | 文章线需 DeepSeek 或 Moonshot 至少一个；配图线可选（通义万相 / 即梦） |
+| 公众号凭据 | — | 发布线可选：个人订阅号 AppID/AppSecret（mp.weixin.qq.com），详见 `docs/ops/manual-tasks-t007-t010.md` |
 
 ## 快速开始
 
@@ -36,7 +38,11 @@ copy backend\.env.example backend\.env
 #   MOONSHOT_API_KEY=sk-...        （文章线，可选第二供应商）
 #   ALIYUN_WANXIANG_API_KEY=...    （配图线，可选）
 #   DREAMINA_API_KEY=...           （配图线，可选）
+#   WECHAT_APP_ID / WECHAT_APP_SECRET   （发布线，可选；PUBLISH_FAKE_MODE 默认 true 假发布）
+#   WENYAN_MCP_COMMAND=wenyan-mcp       （发布线，需 npm install -g @wenyan-md/mcp）
 ```
+
+发布线真实配置（IP 白名单、AppSecret 获取、wenyan-mcp 安装）见 `docs/ops/manual-tasks-t007-t010.md`；不配置时 `PUBLISH_FAKE_MODE=true` 走假发布，不外呼微信接口。
 
 其余配置项（模型 ID、超时、上下文预算等）保持默认即可。
 
@@ -81,17 +87,19 @@ corepack pnpm install
 - **文章工作台**：左侧对话，右侧正文与版本。发送指令（如「写一篇关于 X 的文章」）后流式生成；继续对话产生 v2、v3…；版本下拉可回看任意历史版本（只读）；顶部可切换模型；生成中可点「停止」（不落版本）。
 - **配图工作台**：输入画面描述 → 选择档位/比例 → 发送；进度条实时推进；完成后可「保存素材」。失败时会展示失败卡片，展开可见脱敏详情。
 - **素材库**：浏览已保存素材；点击查看详情（提示词、尺寸等），可跳回来源配图会话。
+- **发布到公众号**：文章工作台右上「发布到公众号」进入四步向导——版本和信息（文章/版本 + 「选择封面」弹窗从全部图片单选 + 作者）→ 勾选配图（「本文配图」置顶分组 + 素材库全部图片）并调整插入位置 → 选排版主题 → 预览组装 Markdown（可直接编辑）→ 确认发布到公众号草稿箱（仅建草稿，不群发；微信要求封面或正文至少一张图，封面可选不插入正文的图）。
+- **发布记录**：按时间倒序查看全部发布结果（成功/失败、media_id）；失败记录可展开错误码与信息；「查看快照」回看发布时的完整内容与配图。
 
 ## 开发者指南
 
 ### 目录结构
 
 ```text
-frontend/           React SPA（5 路由：仪表盘 / 文章列表 / 文章工作台 / 配图工作台 / 素材库）
+frontend/           React SPA（8 路由：仪表盘 / 文章列表 / 文章工作台 / 配图工作台 / 素材库 / 发布向导 / 发布记录 / 快照详情）
   src/                页面、组件、features、hooks、api 客户端、SSE 封装
-  e2e/                Playwright E2E 用例（MVP 场景 A–G + 配图/素材 + 部署形态）
+  e2e/                Playwright E2E 用例（MVP 场景 A–G + 配图/素材 + 发布线 + 部署形态）
 backend/            FastAPI 单进程应用（API + SSE + SQLite 持久化）
-  app/                API 路由、数据库仓储、运行管理（文章线 service / 配图线 image_service）
+  app/                API 路由、数据库仓储、运行管理（文章线 service / 配图线 image_service / 发布线 publish_service + wenyan_client）
   article_agent/      LangGraph 智能体（意图路由、上下文预算压缩、脱敏）
   scripts/            假模型服务器、E2E 服务器、真实 API 冒烟脚本
   data/               运行时数据（SQLite 与图片资产；假模型/E2E 各有独立子目录）
@@ -107,9 +115,9 @@ prototype/          MVP 原型（冻结归档，不再开发）
 ### 测试
 
 ```powershell
-cd backend  ; uv run pytest -p no:cacheprovider   # 后端全量测试（51 例，含前端契约）
-cd frontend ; pnpm test                            # Vitest 组件测试（26 例，含安全渲染断言）
-cd frontend ; pnpm e2e                             # Playwright E2E（11 例，假模型，无需真实 Key）
+cd backend  ; uv run pytest -p no:cacheprovider   # 后端全量测试（82 例，含前端契约）
+cd frontend ; pnpm test                            # Vitest 组件测试（62 例，含安全渲染断言）
+cd frontend ; pnpm e2e                             # Playwright E2E（13 例，假模型，无需真实 Key）
 ```
 
 E2E 首次运行前安装浏览器到项目本地目录（沙箱/受限环境无法写 `%LOCALAPPDATA%`）：
@@ -147,6 +155,8 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
 - **未配置 API Key 的表现**：文章发送后出现失败卡片（脱敏详情），配图线提示无可用生图模型。本地联调请改用假模型服务器。
 - **E2E 浏览器下载失败/缓慢**：`$env:PLAYWRIGHT_DOWNLOAD_HOST = "https://npmmirror.com/mirrors/playwright"` 后重装。
 - **数据在哪、如何重置**：全部在 `backend\data\`（业务库 `article.sqlite3`、图片 `assets/`）；假模型数据在 `data\dev-fake\`、E2E 在 `data\e2e\`，删除对应目录即重置。
+- **发布报 40164（invalid ip）/ IP 白名单**：微信要求调用方公网 IP 在白名单内；到 mp.weixin.qq.com → 设置与开发 → 基本配置 → IP 白名单，加入当前公网 IP（家宽变动后同样处理）。详见 `docs/ops/manual-tasks-t007-t010.md`。
+- **只想体验发布流程、没有公众号**：保持 `PUBLISH_FAKE_MODE=true`，发布返回 `FAKE_MEDIA_xxx` 假 media_id，全流程（含失败重试）可正常演练。
 
 ## 更多文档
 
@@ -154,7 +164,7 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
 | --- | --- |
 | `docs/prd/prd.md` | 产品需求与验收标准 |
 | `docs/tech/tech-design.md` | 技术设计（架构、数据流、上下文预算） |
-| `docs/task/` | 任务拆分 T001–T006 与实施状态 |
+| `docs/task/` | 任务拆分 T001–T010 与实施状态 |
 | `docs/ops/` | 人工操作手册（真实 API 走查、E2E 手册、故障排查） |
 | `backend/README.md` | 后端 API 契约、启动方式、假模型约定 |
 | `frontend/README.md` | 前端结构、命令、与后端的契约 |

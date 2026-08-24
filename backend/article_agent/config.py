@@ -47,6 +47,13 @@ class Settings(BaseSettings):
 
     image_timeout_seconds: float = Field(default=180, gt=0)
 
+    # WeChat Official Account publishing via wenyan-mcp (stdio subprocess).
+    wechat_app_id: str = ""
+    wechat_app_secret: str = ""
+    wenyan_mcp_command: str = "wenyan-mcp"
+    # Fake mode: publish without spawning the MCP subprocess or real WeChat calls.
+    publish_fake_mode: bool = False
+
     llm_timeout_seconds: float = Field(default=180, gt=0)
     llm_max_retries: int = Field(default=2, ge=0)
     llm_max_output_tokens: int = Field(default=4096, gt=0)

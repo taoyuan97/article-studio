@@ -33,6 +33,7 @@ Windows 10+ 可双击使用的前后端服务管理脚本（开发模式）。
 - `uv` 已安装并在 PATH 中（后端依赖）
 - pnpm 可用：PATH 中有 `pnpm`，或有 `corepack`（Node.js 20.19+ 自带；脚本自动设置 `COREPACK_HOME` 到仓库 `.corepack\`）
 - `backend\.env` 已按 `backend\.env.example` 配置真实 API Key；不消耗额度的联调可改用假模型后端（`backend/scripts/dev_fake_server.py`，见 `backend/README.md`）
+- 发布到公众号（可选）：需 `npm install -g @wenyan-md/mcp` 并配置 `WECHAT_APP_ID / WECHAT_APP_SECRET`（`PUBLISH_FAKE_MODE=false`），详见 `docs/ops/manual-tasks-t007-t010.md`；未配置时默认假发布，不影响其余功能
 
 ## 端口约定
 

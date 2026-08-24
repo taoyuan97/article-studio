@@ -259,6 +259,11 @@ export default function ArticleWorkspacePage() {
         <span className="status-pill" data-running={String(running)} aria-live="polite">
           {running ? '正在生成' : '准备就绪'}
         </span>
+        {articleId && (
+          <Link to={`/publish?article_id=${encodeURIComponent(articleId)}`}>
+            <Button className="workspace-publish-entry">发布到公众号</Button>
+          </Link>
+        )}
       </div>
 
       {loadError && (

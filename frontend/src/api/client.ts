@@ -25,6 +25,8 @@ export class ApiError extends Error {
 interface RequestOptions {
   method?: 'GET' | 'POST' | 'PATCH' | 'DELETE'
   body?: unknown
+  /** 请求超时毫秒数（如发布同步等待 120s）；默认不设超时 */
+  timeoutMs?: number
 }
 
 interface ErrorDetail {
@@ -44,8 +46,12 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
       method: options.method ?? 'GET',
       headers: { 'Content-Type': 'application/json' },
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      signal: options.timeoutMs === undefined ? undefined : AbortSignal.timeout(options.timeoutMs),
     })
-  } catch {
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'TimeoutError') {
+      throw new ApiError('请求超时，请稍后重试。', 0, 'REQUEST_TIMEOUT')
+    }
     throw new ApiError(
       '无法连接到后端服务，请确认后端已启动（uvicorn 是否在 127.0.0.1:8000 运行）。',
       0,

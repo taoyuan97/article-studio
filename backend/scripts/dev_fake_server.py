@@ -9,6 +9,9 @@ data_dir）挂载假 LLM 与假生图 provider，其余 API、SSE、SQLite 行�
   SIMULATED_FAILURE，用于验证失败卡片与重新发送；历史消息与压缩转录中的
   「失败」字样不影响运行——正文模板本身含「失败」二字，故用更长的触发词）。
 - 生图：提示词包含「触发失败」→ 延迟后生成失败，用于验证失败卡片。
+- 发布：最新用户消息包含「触发发布失败」→ 生成正文末尾嵌入同名标记，
+  发布线 fake 模式（wenyan_client）据此抛 PUBLISH_MCP_ERROR，用于验证
+  发布失败记录与重试；发布凭据为假值且 PUBLISH_FAKE_MODE=true，不外呼。
 
 用法（backend 目录下）：
 
@@ -62,6 +65,10 @@ ARTICLE_TEMPLATE = """# 冒烟测试文章 v{n}
 
 如果你能看到这段文字，说明文章线的假模型端到端链路已经打通。
 """
+
+# 发布失败触发词：用户消息包含它时，生成正文末尾嵌入同名标记，
+# 供 wenyan_client fake 模式识别并模拟 PUBLISH_MCP_ERROR（与「触发失败」互不包含）。
+PUBLISH_FAIL_TRIGGER = "触发发布失败"
 
 _COLORS = [
     (91, 122, 158),
@@ -126,11 +133,17 @@ class ScriptedFakeChatModel:
         self.generation_count += 1
         return ARTICLE_TEMPLATE.format(n=self.generation_count)
 
+    def _compose_reply(self, messages: list) -> str:
+        text = self._next_article()
+        if PUBLISH_FAIL_TRIGGER in _latest_human_text(messages):
+            text += f"\n\n{PUBLISH_FAIL_TRIGGER}\n"
+        return text
+
     async def ainvoke(self, messages: list, config: dict | None = None):
         if "触发失败" in _latest_human_text(messages):
             await asyncio.sleep(0.5)
             raise RuntimeError("模拟的提供方错误：SIMULATED_FAILURE（已脱敏）")
-        return AIMessage(content=self._next_article())
+        return AIMessage(content=self._compose_reply(messages))
 
     async def astream(
         self, messages: list, config: dict | None = None
@@ -138,7 +151,7 @@ class ScriptedFakeChatModel:
         if "触发失败" in _latest_human_text(messages):
             await asyncio.sleep(0.5)
             raise RuntimeError("模拟的提供方错误：SIMULATED_FAILURE（已脱敏）")
-        text = self._next_article()
+        text = self._compose_reply(messages)
         for index in range(0, len(text), 12):
             if self.chunk_delay:
                 await asyncio.sleep(self.chunk_delay)
@@ -212,6 +225,10 @@ def build_application(
         default_image_provider=None,
         data_dir=data_dir,
         serve_frontend=serve_frontend,
+        # 发布线：fake 模式 + 假凭据（凭据校验仍生效但不外呼，行为与真实后端一致）
+        publish_fake_mode=True,
+        wechat_app_id="fake-app-id",
+        wechat_app_secret="fake-secret",
     )
     registry = ModelRegistry()
     for provider in ("deepseek", "moonshot"):
