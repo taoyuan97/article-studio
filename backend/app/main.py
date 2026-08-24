@@ -27,7 +27,12 @@ from article_agent.registry import ModelRegistry
 
 from .database import NotFoundError, Repository, RunNotActiveError
 from .image_service import ImageRunManager
-from .publish_service import build_publish_markdown, execute_publish, split_sections
+from .publish_service import (
+    build_publish_markdown,
+    execute_publish,
+    split_blocks,
+    split_sections,
+)
 from .service import RunManager
 from .wenyan_client import PublishError, WenyanMcpClient
 
@@ -59,7 +64,9 @@ class AssetCreate(BaseModel):
     title: str = Field(min_length=0, max_length=200)
 
 
-_POSITION_PATTERN = re.compile(r"^(top|bottom|after_section_[1-9]\d*)$")
+_POSITION_PATTERN = re.compile(
+    r"^(top|bottom|after_section_[1-9]\d*|after_block_[1-9]\d*)$"
+)
 
 
 class ImagePlacement(BaseModel):
@@ -71,7 +78,9 @@ class ImagePlacement(BaseModel):
     @classmethod
     def check_position(cls, value: str) -> str:
         if not _POSITION_PATTERN.match(value):
-            raise ValueError("position 必须是 top、bottom 或 after_section_{n}（n>=1）")
+            raise ValueError(
+                "position 必须是 top、bottom、after_section_{n} 或 after_block_{n}（n>=1）"
+            )
         return value
 
 
@@ -606,7 +615,11 @@ def create_app(
             author=payload.author,
             data_dir=request.app.state.data_dir,
         )
-        return {"sections": split_sections(version["content_markdown"]), "markdown": markdown}
+        return {
+            "sections": split_sections(version["content_markdown"]),
+            "blocks": split_blocks(version["content_markdown"]),
+            "markdown": markdown,
+        }
 
     @application.post("/api/publish/articles/{article_id}")
     async def publish_article(article_id: str, payload: PublishCreateRequest, request: Request):

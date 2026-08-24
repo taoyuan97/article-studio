@@ -57,7 +57,7 @@ PUBLISH_FAKE_MODE=false                 # 真实发布必须改为 false（开�
 | 步骤 | 操作 | 关注点 |
 | --- | --- | --- |
 | 1 版本和信息 | 文章工作台右上「发布到公众号」入口；选版本；「选择封面」弹窗单选（可从素材库全部图片中选，无需插入正文）；填作者 | 文章已有生成版本；**微信草稿硬性要求：必须选一张封面图（或正文至少插图一张），纯文字必须选封面** |
-| 2 配图 | 勾选 2+ 张配图，调整插入位置/顺序 | 已选卡片实时反映位置 |
+| 2 配图 | 点击正文画布任意段落/标题设置插入点（出现插入指示线）→「插入配图」弹窗多选 2+ 张（本文配图置顶 + 素材库图片），确定后按勾选顺序插入；已插图内联展示、hover 可删除 | 图片内联显示在对应位置；未设插入点时「插入配图」按钮禁用 |
 | 3 选主题 | 选择排版主题（默认 default） | 未选主题时发布按钮禁用 |
 | 4 预览与发布 | 核对组装 Markdown（可编辑）→ 确认发布 | 成功态展示真实 media_id |
 | 5 核对草稿箱 | mp.weixin.qq.com → 内容与互动 → 草稿箱（新的创作/图文消息） | 标题/封面/作者/配图与预览一致 |
@@ -71,7 +71,7 @@ PUBLISH_FAKE_MODE=false                 # 真实发布必须改为 false（开�
 | --- | --- | --- |
 | `PUBLISH_MCP_ERROR`，详情含 **40164** invalid ip | 本机公网 IP 不在白名单 | 按 §2 查询并更新白名单后重试 |
 | `PUBLISH_MCP_ERROR`，详情含 **41004** appsecret missing | wenyan-mcp 未收到 Secret（.env 未配置或拼写错误） | 核对 §4 配置并重启后端 |
-| `PUBLISH_MCP_ERROR`，详情含 **你必须指定一张封面图** | 未选封面且正文无图（微信草稿硬性要求） | 在发布向导步骤 1「版本和信息」点「选择封面」弹窗选一张（或步骤 2 勾选正文配图）后重试 |
+| `PUBLISH_MCP_ERROR`，详情含 **你必须指定一张封面图** | 未选封面且正文无图（微信草稿硬性要求） | 在发布向导步骤 1「版本和信息」点「选择封面」弹窗选一张（或步骤 2 在正文插入配图）后重试 |
 | `PUBLISH_MCP_ERROR`，详情含 **EPERM ... token.json** | wenyan-mcp 无法写 token 缓存到 `%APPDATA%\wenyan-md`（沙箱/受限令牌环境） | 已修复：后端将 wenyan-mcp 配置目录重定向到 `backend/data/wenyan-md/`（经 `XDG_CONFIG_HOME`），无需人工处理 |
 | `PUBLISH_CREDENTIALS_MISSING` | `WECHAT_APP_ID/SECRET` 未配置 | 按 §4 配置 |
 | `PUBLISH_MCP_NOT_INSTALLED` | 未安装 wenyan-mcp 或命令不在 PATH | 按 §3 安装/修正 `WENYAN_MCP_COMMAND` |

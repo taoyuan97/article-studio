@@ -2,13 +2,14 @@
 
 ## 1. 任务信息
 
-- 状态：待执行
+- 状态：已完成
 - 优先级：P1
 - 类型：交互重构（前后端）
 - 前置任务：T012
 - 后续任务：无
 - 目标目录：`frontend/`、`backend/`
 - 创建日期：2026-08-24
+- 完成日期：2026-08-25
 - 关联文档：`docs/task/T012-publish-cover-author-restructure.md`（步骤 1 封面弹窗，本文配图弹窗的交互参照）、`docs/task/T009-wechat-publish-frontend.md`（原步骤 2 位置编排设计）
 - 需求来源：人工验收反馈——配图应支持鼠标定位到正文任意位置后插入，参考主流编辑器
 
@@ -157,17 +158,50 @@
 
 ## 6. 验收标准
 
-- [ ] 步骤 2 显示正文画布，块级渲染（Markdown 安全渲染，含代码块内空行不拆块）。
-- [ ] 点击任意块出现插入指示线与锚点提示；未设锚点或空正文时「插入配图」禁用并给出原因（决策 ②⑦）。
-- [ ] 「插入配图」弹窗与封面弹窗风格一致：分组缩略图墙、多选、footer「确定（已选 n 张）」、已插入素材置灰（决策 ①②③）。
-- [ ] 确定后多图按勾选顺序内联插入锚点块后；hover 可删除；同锚点多图按插入顺序排列（决策 ③④）。
-- [ ] 发布 payload 与 preview/发布组装使用 `after_block_{i}`；步骤 3 组装结果正确（图在对应块后）。
-- [ ] 切版本保留已选图、失效锚点退到文末并提示；切文章全部重置（决策 ⑥）。
-- [ ] 后端兼容 `top` / `bottom` / `after_section_{n}`（历史发布记录快照/详情不受影响，决策 ⑤）；越界 `after_block` 返回明确错误。
-- [ ] pytest / Vitest / ESLint / tsc / build / Playwright E2E 全量通过。
-- [ ] PRD、tech-design、README、ops 手册同步更新。
-- [ ] `prototype/` 目录未被改动。
+- [x] 步骤 2 显示正文画布，块级渲染（Markdown 安全渲染，含代码块内空行不拆块）。
+- [x] 点击任意块出现插入指示线与锚点提示；未设锚点或空正文时「插入配图」禁用并给出原因（决策 ②⑦）。
+- [x] 「插入配图」弹窗与封面弹窗风格一致：分组缩略图墙、多选、footer「确定（已选 n 张）」、已插入素材置灰（决策 ①②③）。
+- [x] 确定后多图按勾选顺序内联插入锚点块后；hover 可删除；同锚点多图按插入顺序排列（决策 ③④）。
+- [x] 发布 payload 与 preview/发布组装使用 `after_block_{i}`；步骤 3 组装结果正确（图在对应块后）。
+- [x] 切版本保留已选图、失效锚点退到文末并提示；切文章全部重置（决策 ⑥）。
+- [x] 后端兼容 `top` / `bottom` / `after_section_{n}`（历史发布记录快照/详情不受影响，决策 ⑤）；越界 `after_block` 返回明确错误。
+- [x] pytest / Vitest / ESLint / tsc / build / Playwright E2E 全量通过。
+- [x] PRD、tech-design、README、ops 手册同步更新。
+- [x] `prototype/` 目录未被改动。
 
-## 7. 完成定义
+## 7. 实施记录（2026-08-25）
+
+**后端**
+
+- `publish_service.py`：
+  - 新增 `_walk_blocks(markdown)`：单趟行级状态机切顶层块——空行分块；ATX 标题与 fenced code 开启新块（fence 内空行不拆、闭合 fence 需匹配开启 marker）；标题为叶子块（其后内容另起新块）；raw section 计数与 `split_sections` 对齐（H2 行即使在 fence 内也计数），保证旧 `after_section_{n}` 编号不变。
+  - 新增 `split_blocks(markdown)`：基于 `_walk_blocks` 输出全局 1 起编号块 `{index, kind, preview, text}`（`_block_kind` 识别 heading/code/quote/list/table/divider/paragraph；`_block_preview` 首行截断 40 字）。
+  - `build_publish_markdown` 重构为按块重组：`after_block_{i}` 插入第 i 块后（同锚点按 order 升序、块间空行连接）；`top` / `bottom` / `after_section_{n}` 分支保留（历史兼容）；`after_block_{i}` 越界抛 `PUBLISH_PLACEMENT_INVALID`（同 asset 缺失校验层级）。
+- `main.py`：`_POSITION_PATTERN` 扩展 `after_block_[1-9]\d*`；`POST /api/publish/preview` 响应新增 `blocks` 字段（块切分单一事实源在后端）。
+- pytest：`test_publish_service.py` 新增 11 用例（切分：混排连续编号、fence 含空行不拆、fence 内 H2 不拆、标题打断段落、空正文、preview 截断、编号与 sections 对齐；组装：after_block 单图/同锚点多图 order、与 after_section/top/bottom 混用、越界报错；preview 接口契约：blocks 编号连续）。
+
+**前端**
+
+- `types.ts`：新增 `PublishBlock { index; kind; preview; text }`，`PublishPreviewResponse` 增加 `blocks`。
+- `placements.ts` 重写：保留 `positionLabel`（支持 after_block 摘要展示）；新增 `sanitizePlacements`（越界 after_block 退化 bottom 并计数）；删除旧 `positionOptions` / `computeDefaultPlacements` / `movePlacement`。
+- `ArticleCanvas.tsx`（新）：逐块渲染（`MarkdownView` 白名单）、点击块回调锚点、锚点块高亮 + 插入指示线「↳ 将插入到这里」、已插图内联（同锚点按 order、hover 删除按钮）、bottom 退化位图渲染在画布末尾、空正文 Empty 空态。
+- `ImagePickerModal.tsx`（新）：分组缩略图墙多选（本文配图置顶 + 素材库图片），草稿勾选打开时重置、已插入素材置灰标「已插入」、footer「确定（已选 n 张）」n=0 禁用、无图空态引导。
+- `ImagePlacementEditor.tsx` 重构：工具栏（插入配图按钮 + 锚点提示 + 纯文字提示）+ 画布 + 弹窗；退化提示 Alert（可关闭）；块变化重置锚点。
+- `PublishPage.tsx`：blocks 拉取（空 placements 的 preview 复用现有接口）；块变化后 sanitize（决策 ⑥）；`handleInsertAssets`（order 接续同锚点最大值）/`handleRemoveAsset`；切文章清空 blocks。
+- `global.css`：新增画布/块 hover 与锚点态、指示线、内联图卡、工具栏样式；清理旧卡片与位置下拉死样式（弹窗共用类保留）。
+- Vitest：`PublishPage.test.tsx` 重写为 17 用例（画布锚点交互、弹窗分组/多选/置灰、内联删除与 payload 同步、空正文、切版本退化/切文章重置、发布链路）；`placements.test.ts` 重写 7 用例。
+  - jsdom 适配：已关闭弹窗停留 leave 态留在 DOM——弹窗查询走 `withinOpenModal()`（取最后一个非 leave 弹窗），画布图片断言走 `withinCanvas()`（限定 `.publish-canvas`）避免与弹窗残留同名 alt 重复命中。
+
+**E2E**
+
+- `publish.spec.ts` 主路径步骤 2 重写：等待画布 6 块 → 点击导语块（块 2）设锚点 → 插入配图弹窗选配图一（断言分组标题、未勾选确定禁用）→ 内联回显 → 点尾段块（块 6）挪锚点 → 选配图二（断言配图一置灰）→ 内联回显；步骤 4 断言配图一在「## 要点」前、配图二在尾段后（文末）。
+- 校验路径：步骤 2 断言改为画布块渲染 + 「插入配图」按钮 + 引导文案。
+- 定位经验：`filter({ has })` 内层链式定位器（`canvas.locator(...)`）会相对候选元素重根导致 0 匹配，块 wrap 改用 `canvasBlock(i).locator('xpath=..')` 取父级。
+
+**回归**：pytest **98 passed**；Vitest **69 passed**（12 文件）；ESLint 零错误；`tsc --noEmit` / `pnpm build` 成功；Playwright E2E **13 passed**。
+
+**文档**：PRD（FR-P2 重写、用户旅程/IA）、tech-design 5.6（块切分与位置契约）、README 使用指南与功能表、ops 手册 §5 冒烟清单与 §6 错误对照同步更新。
+
+## 8. 完成定义
 
 上述验收全部通过后，T013 完成：发布配图从「小节级下拉编排」升级为「正文画布块级锚点 + 弹窗多选插图」的主流编辑器范式，前后端位置契约向后兼容，历史数据零迁移。

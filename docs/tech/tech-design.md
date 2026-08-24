@@ -2,10 +2,10 @@
 
 ## 1. 文档信息
 
-- 版本：v1.1
-- 状态：已实施（T001–T010 全部完成；v1.1 补记 T007–T010 公众号发布线设计）
+- 版本：v1.2
+- 状态：已实施（T001–T010 全部完成；v1.1 补记 T007–T010 公众号发布线设计；v1.2 补记 T012–T013 发布向导交互演进——封面/作者前置、正文画布块级锚点插图与 `after_block_{i}` 位置契约）
 - 创建日期：2026-08-23
-- 关联文档：`docs/prd/prd.md`（产品需求）、`docs/task/`（任务拆分：T001–T010）
+- 关联文档：`docs/prd/prd.md`（产品需求）、`docs/task/`（任务拆分：T001–T013）
 - 迁移源：`prototype/article-agent-mvp/backend`（契约基准：`backend/tests/test_frontend_contract.py`）
 
 ## 2. 总体架构
@@ -253,11 +253,12 @@ WENYAN_MCP_COMMAND=wenyan-mcp   # 发布子进程命令（stdio MCP，按需拉�
 PUBLISH_FAKE_MODE=false   # true 时不启动子进程、不外呼（开发/测试默认 true）
 ```
 
-### 5.6 发布线设计（T007–T009）
+### 5.6 发布线设计（T007–T013）
 
 - **`app/wenyan_client.py`**：`WenyanMcpClient` 封装 wenyan-mcp（stdio 子进程，按需拉起用完即退）；`list_themes` / `publish_article` 两个工具调用，120s 超时；子进程环境注入凭据并将 wenyan-mcp 配置目录经 `XDG_CONFIG_HOME` 重定向到 `DATA_DIR/wenyan-md/`（规避沙箱/受限令牌下 `%APPDATA%` 不可写的 EPERM）；fake 模式返回内置主题与 `FAKE_MEDIA_xxx`，凭据校验仍生效（行为与真实一致）。假模式失败注入：正文含「触发发布失败」标记 → `PUBLISH_MCP_ERROR`（40164）。
-- **`app/publish_service.py`**：组装（H2 切分 sections → 按 placements 插图 → wenyan frontmatter：title/cover/author）→ 临时文件 → 发布 → 落 `publish_records`（成功/失败均落，快照可回看）→ 临时文件即删。图片 `storage_url` 解析为本地绝对路径（wenyan-mcp 要求），缺失抛 `PUBLISH_ASSET_MISSING`。
-- **前端**：`PublishPage` 四步向导（版本和信息（文章/版本下拉、`CoverPickerModal` 封面弹窗单选（封面独立于正文配图，切文章重置/切版本保留）、作者）→ 配图与位置（分组候选墙（本文配图置顶 + 素材库图片）、round-robin 默认均分、逐图位置选择器）→ 选主题（默认 default）→ 预览编辑与发布（同步等待 120s、成功 media_id / 失败错误码映射文案可重试））；`PublishRecordsPage` 列表（状态筛选、失败展开错误、按文章过滤）；快照详情页只读渲染（frontmatter 剥离 + 本地路径图片映射回 /static + MarkdownView 白名单）。
+- **`app/publish_service.py`**：组装（`_walk_blocks` 顶层块切分（fence/标题感知，与 `split_sections` 的 H2 计数对齐）→ 按 placements 插图 → wenyan frontmatter：title/cover/author）→ 临时文件 → 发布 → 落 `publish_records`（成功/失败均落，快照可回看）→ 临时文件即删。图片 `storage_url` 解析为本地绝对路径（wenyan-mcp 要求），缺失抛 `PUBLISH_ASSET_MISSING`。
+- **插图位置契约（T013）**：`image_placements[].position` 支持 `top` / `bottom` / `after_section_{n}`（历史兼容）/ `after_block_{i}`（块级，全局 1 起编号）。`split_blocks` 供 `POST /api/publish/preview` 返回 `blocks`（`{index, kind, preview, text}`），是前端画布渲染与组装锚点的**单一事实源**（与 `build_publish_markdown` 共用 `_walk_blocks`，编号不漂移）；`after_block_{i}` 越界返回 `PUBLISH_PLACEMENT_INVALID`。
+- **前端**：`PublishPage` 四步向导（版本和信息（文章/版本下拉、`CoverPickerModal` 封面弹窗单选（封面独立于正文配图，切文章重置/切版本保留）、作者）→ 配图与位置（`ArticleCanvas` 正文画布块级渲染 + 点击块设锚点（插入指示线），`ImagePickerModal` 插图弹窗多选（本文配图置顶 + 素材库图片，已插入置灰），确定后按勾选顺序内联插入锚点后；已插图内联展示 hover 删除；切版本失效锚点 sanitize 退到文末并提示）→ 选主题（默认 default）→ 预览编辑与发布（同步等待 120s、成功 media_id / 失败错误码映射文案可重试））；`PublishRecordsPage` 列表（状态筛选、失败展开错误、按文章过滤）；快照详情页只读渲染（frontmatter 剥离 + 本地路径图片映射回 /static + MarkdownView 白名单）。
 
 CORS：开发模式继续允许 `http://localhost:5173` / `http://127.0.0.1:5173`（Vite dev server 默认端口，兜底直连场景）；开发主路径走 Vite proxy（同源，不触发 CORS）。
 

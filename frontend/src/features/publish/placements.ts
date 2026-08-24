@@ -1,75 +1,46 @@
-import type { ImagePlacement, PublishSection } from '../../api/types'
+import type { ImagePlacement, PublishBlock } from '../../api/types'
 
 /**
- * 图片插入位置工具：
- * - position 形如 `top` / `bottom` / `after_section_{n}`（与后端校验规则一致）；
- * - 同一 position 内按 order 升序排列，上移/下移只影响同位置内的相对顺序。
+ * 图片插入位置工具（块级锚点模型）：
+ * - position 形如 `after_block_{n}`（第 n 块之后，正文画布锚点）；
+ * - `bottom` 为版本切换后失效锚点的退化位置（决策：保留图片、退到文末）；
+ * - 同一 position 内按 order 升序排列（即插入顺序）；
+ * - `top` / `after_section_{n}` 为历史兼容值，新向导不再产生。
  */
 
-export function positionLabel(position: string, sections: PublishSection[]): string {
+const AFTER_BLOCK_PATTERN = /^after_block_(\d+)$/
+
+/** 位置可读标签：`第 n 块之后 · 摘要` / `文末` / `文首`；历史值原样返回 */
+export function positionLabel(position: string, blocks: PublishBlock[]): string {
   if (position === 'top') return '文首'
   if (position === 'bottom') return '文末'
-  const match = /^after_section_(\d+)$/.exec(position)
+  const match = AFTER_BLOCK_PATTERN.exec(position)
   if (match) {
     const index = Number(match[1])
-    const section = sections.find((item) => item.index === index)
-    const summary = section?.heading ? `「${truncate(section.heading, 12)}」` : ''
-    return `第 ${index} 节之后${summary ? ` · ${summary}` : ''}`
+    const block = blocks.find((item) => item.index === index)
+    const summary = block?.preview ? ` · ${block.preview}` : ''
+    return `第 ${index} 块之后${summary}`
   }
   return position
 }
 
-function truncate(text: string, max: number): string {
-  return text.length > max ? `${text.slice(0, max)}…` : text
-}
-
-/** 位置下拉选项：文首 / 各小节之后（附标题摘要）/ 文末 */
-export function positionOptions(sections: PublishSection[]): { value: string; label: string }[] {
-  return [
-    { value: 'top', label: positionLabel('top', sections) },
-    ...sections.map((section) => ({
-      value: `after_section_${section.index}`,
-      label: positionLabel(`after_section_${section.index}`, sections),
-    })),
-    { value: 'bottom', label: positionLabel('bottom', sections) },
-  ]
-}
-
 /**
- * 默认位置：按勾选顺序均分到各小节（round-robin，第 i 张 → 第 (i % 小节数 + 1) 节之后）；
- * 无小节时（空正文）全部置于文末。
+ * 版本切换后块数变化时的退化处理（决策 ⑥）：
+ * `after_block_{i}` 超出新块数的位置重置为 `bottom`（图片保留），返回退化数量供界面提示。
  */
-export function computeDefaultPlacements(
-  assetIds: string[],
-  sections: PublishSection[],
-): ImagePlacement[] {
-  return assetIds.map((assetId, index) => ({
-    asset_id: assetId,
-    position:
-      sections.length > 0
-        ? `after_section_${(index % sections.length) + 1}`
-        : 'bottom',
-    order: index,
-  }))
-}
-
-/** 上移/下移：与相邻的同位置项交换 order；无同位置邻居时不动 */
-export function movePlacement(
+export function sanitizePlacements(
   placements: ImagePlacement[],
-  assetId: string,
-  direction: 'up' | 'down',
-): ImagePlacement[] {
-  const sorted = [...placements].sort((a, b) => a.order - b.order)
-  const current = sorted.find((item) => item.asset_id === assetId)
-  if (!current) return placements
-  const siblings = sorted.filter((item) => item.position === current.position)
-  const siblingIndex = siblings.findIndex((item) => item.asset_id === assetId)
-  const neighbor =
-    direction === 'up' ? siblings[siblingIndex - 1] : siblings[siblingIndex + 1]
-  if (!neighbor) return placements
-  return placements.map((item) => {
-    if (item.asset_id === current.asset_id) return { ...item, order: neighbor.order }
-    if (item.asset_id === neighbor.asset_id) return { ...item, order: current.order }
-    return item
+  blocks: PublishBlock[],
+): { placements: ImagePlacement[]; degradedCount: number } {
+  const maxIndex = blocks.length
+  let degradedCount = 0
+  const next = placements.map((placement) => {
+    const match = AFTER_BLOCK_PATTERN.exec(placement.position)
+    if (match && Number(match[1]) > maxIndex) {
+      degradedCount += 1
+      return { ...placement, position: 'bottom' }
+    }
+    return placement
   })
+  return { placements: next, degradedCount }
 }

@@ -12,6 +12,7 @@ from app.publish_service import (
     PublishError,
     build_publish_markdown,
     resolve_image_path,
+    split_blocks,
     split_sections,
 )
 from app.wenyan_client import WenyanMcpClient
@@ -63,6 +64,57 @@ def test_split_sections_ignores_h3_and_h1():
     assert sections[0]["heading"] is None
     assert "# Title" in sections[0]["body"]
     assert sections[1]["heading"] == "Real"
+
+
+# ---------------------------------------------------------------- split_blocks
+
+
+def test_split_blocks_mixed_kinds_with_continuous_index():
+    markdown = "导语段落\n\n## 一\n正文一\n\n- 列表项 A\n- 列表项 B\n\n> 引用一行\n\n## 二\n正文二"
+    blocks = split_blocks(markdown)
+    assert [b["index"] for b in blocks] == [1, 2, 3, 4, 5, 6, 7]
+    assert [b["kind"] for b in blocks] == [
+        "paragraph", "heading", "paragraph", "list", "quote", "heading", "paragraph",
+    ]
+    assert blocks[1]["preview"] == "一"
+    assert blocks[3]["preview"] == "列表项 A"
+
+
+def test_split_blocks_code_fence_internal_blank_lines_not_split():
+    markdown = "前文\n\n```python\ncode_one\n\ncode_two\n```\n\n后文"
+    blocks = split_blocks(markdown)
+    assert len(blocks) == 3
+    assert blocks[1]["kind"] == "code"
+    assert blocks[1]["preview"] == "code_one"
+
+
+def test_split_blocks_h2_inside_fence_stays_single_block():
+    markdown = "```\n## not a section\n```"
+    blocks = split_blocks(markdown)
+    assert len(blocks) == 1
+    assert blocks[0]["kind"] == "code"
+
+
+def test_split_blocks_heading_interrupts_paragraph_without_blank_line():
+    blocks = split_blocks("段落文字\n## 紧跟标题\n接续正文")
+    assert [b["kind"] for b in blocks] == ["paragraph", "heading", "paragraph"]
+    assert [b["index"] for b in blocks] == [1, 2, 3]
+
+
+def test_split_blocks_empty_markdown():
+    assert split_blocks("") == []
+    assert split_blocks("   \n\n  \n") == []
+
+
+def test_split_blocks_long_preview_truncated():
+    blocks = split_blocks("a" * 60)
+    assert blocks[0]["preview"] == "a" * 40 + "…"
+
+
+def test_split_blocks_numbering_matches_sections_walk():
+    # 与 build_publish_markdown 的组装锚点一致：导语=1，## 一=2，正文一=3，## 二=4，正文二=5
+    markdown = "导语\n\n## 一\n正文一\n\n## 二\n正文二"
+    assert [b["index"] for b in split_blocks(markdown)] == [1, 2, 3, 4, 5]
 
 
 # ------------------------------------------------------- build_publish_markdown
@@ -135,6 +187,75 @@ def test_build_publish_markdown_insert_positions_and_order(asset_env):
     mid2 = str((data_dir / "assets/images/mid2.png").resolve())
     assert body.index("two body") < body.index(f"![]({mid1})") < body.index(f"![]({mid2})")
     assert body.index("intro") < body.index("## One") < body.index("one body") < body.index("## Two")
+
+
+def test_build_publish_markdown_after_block_positions_and_order(asset_env):
+    data_dir, assets, _ = asset_env
+    content = "导语\n\n## 一\n正文一\n\n## 二\n正文二"
+    # 块编号：导语=1，## 一=2，正文一=3，## 二=4，正文二=5
+    markdown = build_publish_markdown(
+        title="块级插图",
+        content_markdown=content,
+        image_placements=[
+            {"asset_id": "asset-mid2", "position": "after_block_2", "order": 2},
+            {"asset_id": "asset-mid1", "position": "after_block_2", "order": 1},
+            {"asset_id": "asset-cover", "position": "after_block_5", "order": 0},
+        ],
+        assets=assets,
+        data_dir=data_dir,
+    )
+    lines = markdown.splitlines()
+    body_start = lines.index("---", 1) + 1
+    body = "\n".join(lines[body_start:])
+    mid1 = str((data_dir / "assets/images/mid1.png").resolve())
+    mid2 = str((data_dir / "assets/images/mid2.png").resolve())
+    cover = str((data_dir / "assets/images/cover.png").resolve())
+
+    # after_block_2：紧跟「## 一」之后、正文一之前；同锚点按 order 排列（mid1 先于 mid2）
+    assert body.index("## 一") < body.index(f"![]({mid1})") < body.index(f"![]({mid2})")
+    assert body.index(f"![]({mid2})") < body.index("正文一")
+    # after_block_5：最后一个正文块之后
+    assert body.rstrip().endswith(f"![]({cover})")
+    assert body.index("正文二") < body.index(f"![]({cover})")
+
+
+def test_build_publish_markdown_after_block_mixed_with_legacy_positions(asset_env):
+    data_dir, assets, _ = asset_env
+    content = "导语\n\n## 一\n正文一"
+    markdown = build_publish_markdown(
+        title="混合位置",
+        content_markdown=content,
+        image_placements=[
+            {"asset_id": "asset-cover", "position": "top", "order": 0},
+            # 块编号：导语=1，## 一=2，正文一=3 → after_block_3 与 after_section_2 都在正文一后
+            {"asset_id": "asset-mid1", "position": "after_block_3", "order": 0},
+            {"asset_id": "asset-mid2", "position": "after_section_2", "order": 0},
+        ],
+        assets=assets,
+        data_dir=data_dir,
+    )
+    body = markdown.split("\n---\n", 1)[1]
+    mid1 = str((data_dir / "assets/images/mid1.png").resolve())
+    mid2 = str((data_dir / "assets/images/mid2.png").resolve())
+
+    assert body.index("正文一") < body.index(f"![]({mid1})") < body.index(f"![]({mid2})")
+    # 块图在节图之前（同锚点确定性顺序）
+    assert body.index(f"![]({mid1})") < body.index(f"![]({mid2})")
+
+
+def test_build_publish_markdown_after_block_out_of_range(asset_env):
+    data_dir, assets, _ = asset_env
+    with pytest.raises(PublishError) as exc_info:
+        build_publish_markdown(
+            title="越界",
+            content_markdown="导语\n\n## 一\n正文一",  # 共 3 块
+            image_placements=[
+                {"asset_id": "asset-cover", "position": "after_block_4", "order": 0}
+            ],
+            assets=assets,
+            data_dir=data_dir,
+        )
+    assert exc_info.value.code == "PUBLISH_PLACEMENT_INVALID"
 
 
 def test_build_publish_markdown_bottom_and_no_images(asset_env):
@@ -332,6 +453,76 @@ async def test_publish_preview_returns_sections_and_markdown(api):
     assert data["markdown"].startswith("---\n")
     assert 'title: "测试文章"' in data["markdown"]
     assert "![](" in data["markdown"]
+
+
+async def test_publish_preview_returns_blocks_with_continuous_index(api):
+    application, client, tmp_path = api
+    article, _ = await make_article_with_version(
+        api, content="导语\n\n## 一\n正文一\n\n```python\ncode\n\nmore\n```\n\n## 二\n正文二"
+    )
+
+    response = await client.post("/api/publish/preview", json={
+        "article_id": article["id"],
+        "image_placements": [],
+    })
+    assert response.status_code == 200, response.text
+    blocks = response.json()["blocks"]
+    # 导语=1，## 一=2，正文一=3，代码块（内部空行不拆）=4，## 二=5，正文二=6
+    assert [b["index"] for b in blocks] == [1, 2, 3, 4, 5, 6]
+    assert [b["kind"] for b in blocks] == [
+        "paragraph", "heading", "paragraph", "code", "heading", "paragraph",
+    ]
+    assert blocks[3]["preview"] == "code"
+
+
+async def test_publish_preview_after_block_assembly(api):
+    application, client, tmp_path = api
+    article, _ = await make_article_with_version(api)
+    asset_id = seed_asset(application, tmp_path, "mid")
+
+    response = await client.post("/api/publish/preview", json={
+        "article_id": article["id"],
+        "image_placements": [
+            {"asset_id": asset_id, "position": "after_block_2", "order": 0}
+        ],
+    })
+    assert response.status_code == 200, response.text
+    markdown = response.json()["markdown"]
+    # after_block_2 = 「## 一」之后：图片在「## 一」与「正文一」之间
+    assert markdown.index("## 一") < markdown.index("![](") < markdown.index("正文一")
+
+
+async def test_publish_preview_after_block_out_of_range_rejected(api):
+    application, client, tmp_path = api
+    article, _ = await make_article_with_version(api)
+    asset_id = seed_asset(application, tmp_path, "mid")
+
+    response = await client.post("/api/publish/preview", json={
+        "article_id": article["id"],
+        "image_placements": [
+            {"asset_id": asset_id, "position": "after_block_99", "order": 0}
+        ],
+    })
+    assert response.status_code == 400, response.text
+    assert response.json()["error"]["code"] == "PUBLISH_PLACEMENT_INVALID"
+
+
+async def test_publish_success_with_after_block_position(api):
+    application, client, tmp_path = api
+    article, _ = await make_article_with_version(api)
+    asset_id = seed_asset(application, tmp_path, "pic")
+
+    response = await client.post(f"/api/publish/articles/{article['id']}", json={
+        "theme_id": "default",
+        "image_placements": [
+            {"asset_id": asset_id, "position": "after_block_3", "order": 0}
+        ],
+    })
+    assert response.status_code == 200, response.text
+    records = (await client.get(f"/api/publish/records?article_id={article['id']}")).json()["items"]
+    assert records[0]["image_placements"][0]["position"] == "after_block_3"
+    snapshot = records[0]["content_snapshot"]
+    assert snapshot.index("正文一") < snapshot.index("![](") < snapshot.index("## 二")
 
 
 async def test_publish_success_writes_record_with_fake_media_id(api):

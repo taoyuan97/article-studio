@@ -274,7 +274,19 @@ export interface PublishSection {
 }
 
 /**
- * 图片插入位置：`top`（文首）/ `bottom`（文末）/ `after_section_{n}`（第 n 节之后）；
+ * 顶层块切分结果（空行分隔，围栏代码块内空行不拆块）；
+ * 1 起始全局索引对应 after_block_{n} 插入锚点，与后端组装编号一致。
+ */
+export interface PublishBlock {
+  index: number
+  kind: string
+  preview: string
+  text: string
+}
+
+/**
+ * 图片插入位置：`after_block_{n}`（第 n 块之后，画布锚点）/
+ * `after_section_{n}`（第 n 节之后，历史兼容）/ `top` / `bottom`；
  * 同一 position 内按 order 升序排列。
  */
 export interface ImagePlacement {
@@ -286,6 +298,7 @@ export interface ImagePlacement {
 /** POST /api/publish/preview 响应 */
 export interface PublishPreviewResponse {
   sections: PublishSection[]
+  blocks: PublishBlock[]
   markdown: string
 }
 

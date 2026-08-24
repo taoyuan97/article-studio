@@ -7,11 +7,12 @@ import { assetsApi } from '../api/assets'
 import { imageSessionsApi } from '../api/imageSessions'
 import { publishApi } from '../api/publish'
 import type { ApiError } from '../api/client'
-import type { ImagePlacement, PublishSection, PublishTheme } from '../api/types'
+import type { ImagePlacement, PublishBlock, PublishTheme } from '../api/types'
 import StatusBanner from '../components/StatusBanner'
 import CoverPickerModal from '../features/publish/CoverPickerModal'
 import ImagePlacementEditor from '../features/publish/ImagePlacementEditor'
 import { publishErrorText } from '../features/publish/errorText'
+import { sanitizePlacements } from '../features/publish/placements'
 import { resolveImageUrl } from '../lib/format'
 
 const STEP_ITEMS = [
@@ -29,7 +30,7 @@ type PublishPhase =
 
 /**
  * 发布向导（专注模式，四步流）：
- * 选文章/版本 → 配图与插入位置（含封面/作者）→ 选主题 → 预览编辑并发布到公众号草稿箱。
+ * 版本和信息（文章/版本/封面/作者）→ 配图与位置（正文画布锚点插图）→ 选主题 → 预览编辑并发布到公众号草稿箱。
  * 向导状态本地维护，步骤可回退且选择保持；发布成功后引导查看发布记录。
  */
 export default function PublishPage() {
@@ -47,8 +48,9 @@ export default function PublishPage() {
   const [coverPickerOpen, setCoverPickerOpen] = useState(false)
   const [author, setAuthor] = useState('')
   const [themeId, setThemeId] = useState<string | null>(null)
-  const [sections, setSections] = useState<PublishSection[]>([])
-  const [sectionsError, setSectionsError] = useState<string | null>(null)
+  const [blocks, setBlocks] = useState<PublishBlock[]>([])
+  const [blocksError, setBlocksError] = useState<string | null>(null)
+  const [degradedCount, setDegradedCount] = useState(0)
   const [previewMarkdown, setPreviewMarkdown] = useState('')
   const [previewPending, setPreviewPending] = useState(false)
   const [previewError, setPreviewError] = useState<string | null>(null)
@@ -117,36 +119,47 @@ export default function PublishPage() {
     }
   }, [themesQuery.data])
 
-  // 文章/版本变化：清空图片选择与小节（小节数可能变化，旧位置会失效）
+  // 切换文章：清空图片选择与画布（本文配图语境变化）
   useEffect(() => {
     setSelectedAssetIds([])
     setPlacements([])
-    setSections([])
-    setSectionsError(null)
-  }, [articleId, resolvedVersionId])
+    setBlocks([])
+    setBlocksError(null)
+    setDegradedCount(0)
+  }, [articleId])
 
   // 封面仅在切换文章时重置（本文配图语境变化；封面与版本内容无关）
   useEffect(() => {
     setCoverAssetId(null)
   }, [articleId])
 
-  // 拉取正文小节（空 placements 的 preview，仅取 sections）
+  // 拉取正文块（空 placements 的 preview，仅取 blocks；切版本保留已插图，见下方 sanitize）
   useEffect(() => {
     if (!articleId) return
     let cancelled = false
-    setSectionsError(null)
+    setBlocksError(null)
     publishApi
       .publishPreview(articleId, { version_id: resolvedVersionId, image_placements: [] })
       .then((result) => {
-        if (!cancelled) setSections(result.sections)
+        if (!cancelled) setBlocks(result.blocks)
       })
       .catch((error: ApiError) => {
-        if (!cancelled) setSectionsError(error.message)
+        if (!cancelled) setBlocksError(error.message)
       })
     return () => {
       cancelled = true
     }
   }, [articleId, resolvedVersionId])
+
+  // 块变化（版本切换）后评估已插图位置：失效锚点退到文末并提示（决策 ⑥）
+  useEffect(() => {
+    if (blocks.length === 0) return
+    const { placements: next, degradedCount: count } = sanitizePlacements(placements, blocks)
+    setPlacements(next)
+    setDegradedCount(count)
+    // placements 不入依赖：仅在块变化时评估，避免插图触发循环
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [blocks])
 
   const assemblyInput = useMemo(
     () => ({
@@ -187,24 +200,27 @@ export default function PublishPage() {
   }, [step, articleId])
 
   // ---------- 交互 ----------
-  const handleToggleAsset = useCallback(
-    (assetId: string, checked: boolean) => {
-      if (checked) {
-        // 默认位置：按勾选顺序继续均分到各小节（round-robin）；封面在步骤 1 独立选择
-        const position =
-          sections.length > 0
-            ? `after_section_${(selectedAssetIds.length % sections.length) + 1}`
-            : 'bottom'
-        const nextOrder = placements.reduce((max, item) => Math.max(max, item.order), -1) + 1
-        setSelectedAssetIds((prev) => [...prev, assetId])
-        setPlacements((prev) => [...prev, { asset_id: assetId, position, order: nextOrder }])
-      } else {
-        setSelectedAssetIds((prev) => prev.filter((id) => id !== assetId))
-        setPlacements((prev) => prev.filter((item) => item.asset_id !== assetId))
-      }
-    },
-    [placements, sections, selectedAssetIds.length],
-  )
+  const handleInsertAssets = useCallback((anchorBlockIndex: number, assetIds: string[]) => {
+    const anchor = `after_block_${anchorBlockIndex}`
+    setPlacements((prev) => {
+      // 同锚点内 order 接续现有最大值，多图按勾选顺序连续编号
+      const startOrder = prev
+        .filter((item) => item.position === anchor)
+        .reduce((max, item) => Math.max(max, item.order), -1) + 1
+      const additions = assetIds.map((assetId, i) => ({
+        asset_id: assetId,
+        position: anchor,
+        order: startOrder + i,
+      }))
+      return [...prev, ...additions]
+    })
+    setSelectedAssetIds((prev) => [...prev, ...assetIds])
+  }, [])
+
+  const handleRemoveAsset = useCallback((assetId: string) => {
+    setSelectedAssetIds((prev) => prev.filter((id) => id !== assetId))
+    setPlacements((prev) => prev.filter((item) => item.asset_id !== assetId))
+  }, [])
 
   const executePublish = useCallback(async () => {
     if (!articleId || !themeId) return
@@ -344,9 +360,7 @@ export default function PublishPage() {
                 message="该文章还没有生成内容版本，请先在文章工作台生成后再发布。"
               />
             )}
-            {sectionsError && (
-              <StatusBanner kind="error" message={sectionsError} />
-            )}
+            {blocksError && <StatusBanner kind="error" message={blocksError} />}
           </section>
         )}
 
@@ -356,9 +370,11 @@ export default function PublishPage() {
             libraryAssets={libraryAssets}
             selectedAssetIds={selectedAssetIds}
             placements={placements}
-            sections={sections}
-            onToggleAsset={handleToggleAsset}
-            onPlacementsChange={setPlacements}
+            blocks={blocks}
+            degradedCount={degradedCount}
+            onDismissDegraded={() => setDegradedCount(0)}
+            onInsertAssets={handleInsertAssets}
+            onRemoveAsset={handleRemoveAsset}
           />
         )}
 

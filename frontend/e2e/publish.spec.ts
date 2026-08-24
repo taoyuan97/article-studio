@@ -82,33 +82,39 @@ test.describe('发布线场景', () => {
     await page.getByLabel('作者').fill('测试作者')
     await page.getByRole('button', { name: NEXT_STEP }).click()
 
-    // 步骤 2：勾选两张配图 → 默认 round-robin 位置；调整配图二到第 3 节之后
-    await page.getByRole('button', { name: /配图一/ }).click()
-    await page.getByRole('button', { name: /配图二/ }).click()
-    await expect(page.getByText('已选图片（2）', { exact: true })).toBeVisible()
-    await expect(page.locator('.publish-card', { hasText: '配图一' })).toContainText(
-      '插入位置：第 1 节之后',
-    )
+    // 步骤 2：正文画布锚点插图（假文章正文切成 6 块：标题/导语/要点标题/列表/结语标题/尾段）
+    const canvas = page.locator('.publish-canvas')
+    await expect(canvas).toBeVisible()
+    await expect(canvas.locator('.publish-canvas-block')).toHaveCount(6)
 
-    // 调整配图二位置到「第 3 节之后 · 「结语」」（第 3 节即最后一节，图插在结语之后）。
-    // 下拉为虚拟列表只渲染激活项附近，input 又被选中文案遮挡 pointer-events：
-    // focus + ArrowDown 打开后，逐次 ArrowDown 直到目标项激活（必在可视区），Enter 选中
-    await page.getByRole('combobox', { name: '配图二 插入位置' }).focus()
-    await page.keyboard.press('ArrowDown')
-    const dropdown = page.locator('.ant-select-dropdown:not(.ant-select-dropdown-hidden)')
-    await expect(dropdown).toBeVisible()
-    const targetPosition = '第 3 节之后 · 「结语」'
-    for (let i = 0; i < 8; i++) {
-      const activeTitle = await dropdown
-        .locator('.ant-select-item-option-active')
-        .getAttribute('title')
-      if (activeTitle === targetPosition) break
-      await page.keyboard.press('ArrowDown')
-    }
-    await page.keyboard.press('Enter')
-    await expect(page.locator('.publish-card', { hasText: '配图二' })).toContainText(
-      '插入位置：第 3 节之后',
-    )
+    // 点击导语块（块 2）设锚点 → 锚点高亮 + 插入指示线 → 弹窗选配图一 → 内联回显
+    // wrap 用块元素的父级定位（filter({has}) 的内层链式定位器会相对候选重根导致匹配失败）
+    const canvasBlock = (i: number) =>
+      canvas.locator(`.publish-canvas-block[data-block-index="${i}"]`)
+    const blockWrap = (i: number) => canvasBlock(i).locator('xpath=..')
+    const insertButton = page.getByRole('button', { name: '插入配图' })
+    await expect(insertButton).toBeDisabled()
+    await canvasBlock(2).click()
+    await expect(page.locator('.publish-canvas-anchor-line')).toHaveText('↳ 将插入到这里')
+    await expect(page.getByText('将在第 2 块之后插入。')).toBeVisible()
+    await insertButton.click()
+    const pickerDialog = page.getByRole('dialog')
+    await expect(pickerDialog.getByText('本文配图（2）')).toBeVisible()
+    // 已插入素材置灰不可重复选；未勾选时确定禁用
+    await expect(pickerDialog.getByRole('button', { name: /^确\s*定/ })).toBeDisabled()
+    await pickerDialog.getByRole('button', { name: /配图一/ }).click()
+    await pickerDialog.getByRole('button', { name: /^确\s*定（已选 1 张）$/ }).click()
+    await expect(blockWrap(2).locator('.publish-canvas-image-title')).toHaveText('配图一')
+
+    // 点击尾段块（块 6）挪动锚点 → 弹窗选配图二（配图一已置灰）→ 内联回显
+    await canvasBlock(6).click()
+    await expect(page.getByText('将在第 6 块之后插入。')).toBeVisible()
+    await insertButton.click()
+    const pickerDialog2 = page.getByRole('dialog')
+    await expect(pickerDialog2.getByRole('button', { name: /配图一/ })).toBeDisabled()
+    await pickerDialog2.getByRole('button', { name: /配图二/ }).click()
+    await pickerDialog2.getByRole('button', { name: /^确\s*定（已选 1 张）$/ }).click()
+    await expect(blockWrap(6).locator('.publish-canvas-image-title')).toHaveText('配图二')
 
     // 步骤 3：主题默认选中 default
     await page.getByRole('button', { name: NEXT_STEP }).click()
@@ -125,9 +131,9 @@ test.describe('发布线场景', () => {
     expect((markdown.match(/!\[\]\(/g) ?? []).length).toBe(2)
     expect(markdown).toContain('## 要点')
     expect(markdown).toContain('## 结语')
-    // 配图一在第 1 节（导语）之后、「要点」之前；配图二在第 3 节（结语）之后
+    // 配图一在导语块（块 2）之后、「## 要点」之前；配图二在尾段（块 6）之后（文末）
     expect(markdown.indexOf('![](')).toBeLessThan(markdown.indexOf('## 要点'))
-    expect(markdown.lastIndexOf('![](')).toBeGreaterThan(markdown.indexOf('## 结语'))
+    expect(markdown.lastIndexOf('![](')).toBeGreaterThan(markdown.indexOf('如果你能看到这段文字'))
 
     // 发布 → 确认弹窗 → 成功态展示 FAKE media_id
     await page.getByRole('button', { name: '发布到公众号草稿箱' }).click()
@@ -168,8 +174,10 @@ test.describe('发布线场景', () => {
 
     await page.goto(`/publish?article_id=${articleId}`)
     await page.getByRole('button', { name: NEXT_STEP }).click() // 配图步：无图直接过
-    // 本用例文章无关联配图；素材库图片分组可见与否取决于历史数据，仅断言步骤渲染
-    await expect(page.getByText('选择配图')).toBeVisible()
+    // 本用例文章无关联配图；素材库图片分组可见与否取决于历史数据，仅断言画布步骤渲染
+    await expect(page.locator('.publish-canvas-block').first()).toBeVisible()
+    await expect(page.getByRole('button', { name: '插入配图' })).toBeVisible()
+    await expect(page.getByText('点击正文任意位置选择插入点，再插入配图。')).toBeVisible()
     await page.getByRole('button', { name: NEXT_STEP }).click() // 主题步
 
     // 取消默认主题 → 预览步发布按钮禁用

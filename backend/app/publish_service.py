@@ -1,9 +1,11 @@
 """Assemble article + images into publishable markdown and execute publishing.
 
-The assembly flow: split the article body into H2 sections, resolve image
-assets (static storage URL -> local absolute path), insert `![](path)` lines
-at the requested positions, prepend wenyan frontmatter, then hand the file to
-the wenyan MCP client and persist a publish record.
+The assembly flow: split the article body into H2 sections then top-level
+blocks, resolve image assets (static storage URL -> local absolute path),
+insert `![](path)` lines at the requested positions (`after_block_{n}` from
+the canvas wizard; `top` / `bottom` / `after_section_{n}` kept for backward
+compatibility), prepend wenyan frontmatter, then hand the file to the wenyan
+MCP client and persist a publish record.
 """
 
 from __future__ import annotations
@@ -18,6 +20,9 @@ from .database import NotFoundError, Repository
 from .wenyan_client import PublishError, WenyanMcpClient
 
 _H2_PATTERN = re.compile(r"^##\s+(.+?)\s*$")
+_ATX_HEADING_PATTERN = re.compile(r"^#{1,6}(\s|$)")
+_FENCE_OPEN_PATTERN = re.compile(r"^(\s*)(`{3,}|~{3,})")
+_AFTER_BLOCK_PATTERN = re.compile(r"^after_block_(\d+)$")
 
 
 def split_sections(markdown: str) -> list[dict[str, Any]]:
@@ -51,6 +56,134 @@ def split_sections(markdown: str) -> list[dict[str, Any]]:
     return result
 
 
+def _walk_blocks(markdown: str) -> list[dict[str, Any]]:
+    """One pass over lines: fence-aware top-level blocks with raw section spans.
+
+    - Blocks are separated by blank lines; ATX headings and fenced code
+      openers start new blocks; lines inside a fence never split it (internal
+      blank lines preserved, closing fence must match the opening marker).
+    - Raw section counting mirrors `split_sections` (H2 lines increment the
+      counter even inside fences), so legacy `after_section_{n}` numbering is
+      unchanged. Each block records the raw section of its first/last line;
+      a fence spanning H2s simply covers several sections.
+    """
+    blocks: list[dict[str, Any]] = []
+    current_lines: list[str] = []
+    current_start_section = 0
+    raw_section = 0
+    fence_marker: str | None = None
+    heading_only = False
+
+    def flush() -> None:
+        nonlocal current_lines, heading_only
+        if current_lines:
+            blocks.append(
+                {
+                    "text": "\n".join(current_lines),
+                    "start_section": current_start_section,
+                    "end_section": raw_section,
+                }
+            )
+        current_lines = []
+        heading_only = False
+
+    for line in markdown.splitlines():
+        if fence_marker is not None:
+            current_lines.append(line)
+            if _H2_PATTERN.match(line):
+                raw_section += 1
+            stripped = line.strip()
+            if (
+                stripped
+                and stripped[0] == fence_marker[0]
+                and len(stripped) >= len(fence_marker)
+                and set(stripped) == {fence_marker[0]}
+            ):
+                fence_marker = None
+                flush()
+            continue
+        if _H2_PATTERN.match(line):
+            flush()
+            raw_section += 1
+            current_start_section = raw_section
+            current_lines = [line]
+            heading_only = True
+            continue
+        if not line.strip():
+            flush()
+            continue
+        fence_match = _FENCE_OPEN_PATTERN.match(line)
+        if fence_match:
+            flush()
+            current_start_section = raw_section
+            current_lines = [line]
+            fence_marker = fence_match.group(2)
+            continue
+        if _ATX_HEADING_PATTERN.match(line):
+            flush()
+            current_start_section = raw_section
+            current_lines = [line]
+            heading_only = True
+            continue
+        if heading_only:
+            # 标题是叶子块：其后内容另起新块
+            flush()
+        if not current_lines:
+            current_start_section = raw_section
+        current_lines.append(line)
+    flush()
+    return blocks
+
+
+def _block_kind(text: str) -> str:
+    first_line = text.split("\n", 1)[0]
+    if _ATX_HEADING_PATTERN.match(first_line):
+        return "heading"
+    if _FENCE_OPEN_PATTERN.match(first_line):
+        return "code"
+    stripped = first_line.strip()
+    if stripped.startswith(">"):
+        return "quote"
+    if re.match(r"^(\s*)([-*+]|\d{1,9}[.)])\s", first_line):
+        return "list"
+    if stripped.startswith("|"):
+        return "table"
+    if re.fullmatch(r"(-{3,}|\*{3,}|_{3,})", stripped):
+        return "divider"
+    return "paragraph"
+
+
+def _block_preview(text: str) -> str:
+    lines = text.split("\n")
+    source = lines[0]
+    if _FENCE_OPEN_PATTERN.match(source) and len(lines) > 1:
+        source = lines[1]
+    cleaned = re.sub(r"^(#{1,6}\s+|>\s*|[-*+]\s+|\d{1,9}[.)]\s+)", "", source.strip())
+    return cleaned[:40] + ("…" if len(cleaned) > 40 else "")
+
+
+def split_blocks(markdown: str) -> list[dict[str, Any]]:
+    """Top-level blocks with 1-based global indices for the preview API.
+
+    Blocks are the insert anchors for `after_block_{n}` placements; the
+    numbering is identical to what `build_publish_markdown` uses (both walk
+    `_walk_blocks`), so frontend anchors never drift from assembly. `text`
+    carries the full block markdown so the frontend canvas renders blocks
+    without re-splitting the article.
+    """
+    result: list[dict[str, Any]] = []
+    for block in _walk_blocks(markdown):
+        result.append(
+            {
+                "index": len(result) + 1,
+                "kind": _block_kind(block["text"]),
+                "preview": _block_preview(block["text"]),
+                "text": block["text"],
+            }
+        )
+    return result
+
+
 def resolve_image_path(storage_url: str, data_dir: Path) -> str:
     """Resolve an asset storage URL into a path wenyan-mcp can consume.
 
@@ -78,14 +211,6 @@ def _yaml_quote(value: str) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
-def _section_text(section: dict[str, Any]) -> str:
-    if section["heading"] is None:
-        return section["body"]
-    if not section["body"]:
-        return f"## {section['heading']}"
-    return f"## {section['heading']}\n{section['body']}"
-
-
 def build_publish_markdown(
     *,
     title: str,
@@ -111,16 +236,41 @@ def build_publish_markdown(
         path = resolve_image_path(asset["storage_url"], data_dir)
         by_position.setdefault(placement["position"], []).append(f"![]({path})")
 
-    sections = split_sections(content_markdown)
+    blocks = _walk_blocks(content_markdown)
+    total_blocks = len(blocks)
+    for position in by_position:
+        block_match = _AFTER_BLOCK_PATTERN.match(position)
+        if block_match and int(block_match.group(1)) > total_blocks:
+            raise PublishError(
+                "PUBLISH_PLACEMENT_INVALID",
+                f"图片插入位置越界：{position}（正文共 {total_blocks} 个块）",
+            )
+
+    # 小节重编号：导语有内容时导语=1（与 split_sections 丢弃空导语的行为一致）
+    section_offset = 1 if any(b["start_section"] == 0 for b in blocks) else 0
+
     parts: list[str] = []
     top_images = by_position.get("top")
     if top_images:
         parts.append("\n\n".join(top_images))
-    for section in sections:
-        parts.append(_section_text(section))
-        images = by_position.get(f"after_section_{section['index']}")
-        if images:
-            parts.append("\n\n".join(images))
+    for i, block in enumerate(blocks):
+        parts.append(block["text"])
+        block_images = by_position.get(f"after_block_{i + 1}")
+        if block_images:
+            parts.append("\n\n".join(block_images))
+        # 该块是其覆盖范围内各小节的最后一个块 → 小节图插在其后
+        start_section = block["start_section"] + section_offset
+        end_section = block["end_section"] + section_offset
+        next_start = (
+            blocks[i + 1]["start_section"] + section_offset
+            if i + 1 < len(blocks)
+            else None
+        )
+        last_closed = end_section if next_start is None else min(end_section, next_start - 1)
+        for section_no in range(start_section, last_closed + 1):
+            section_images = by_position.get(f"after_section_{section_no}")
+            if section_images:
+                parts.append("\n\n".join(section_images))
     bottom_images = by_position.get("bottom")
     if bottom_images:
         parts.append("\n\n".join(bottom_images))
