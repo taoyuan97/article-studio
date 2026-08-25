@@ -23,10 +23,15 @@ from article_agent.agent import ArticleAgent
 from article_agent.callbacks import build_callbacks
 from article_agent.config import Settings
 from article_agent.image_providers import ImageProviderRegistry
+from article_agent.prompts import (
+    DEFAULT_IMAGE_PLAN_INSTRUCTIONS,
+    DEFAULT_IMAGE_PLAN_ROLE,
+)
 from article_agent.registry import ModelRegistry
 
 from .database import NotFoundError, Repository, RunNotActiveError
 from .image_service import ImageRunManager
+from .plan_service import PlanError, generate_image_plan
 from .publish_service import (
     build_publish_markdown,
     execute_publish,
@@ -107,6 +112,15 @@ class PublishCreateRequest(BaseModel):
 class PublishRenderPreviewRequest(PublishPreviewRequest):
     theme_id: str = Field(min_length=1)
     markdown: str | None = None
+
+
+class ImagePlanCreateRequest(BaseModel):
+    article_id: str = Field(min_length=1)
+    version_id: str | None = None
+    role: str | None = Field(default=None, max_length=2_000)
+    instructions: str | None = Field(default=None, max_length=20_000)
+    provider: str = Field(min_length=1)
+    model: str = Field(min_length=1)
 
 
 def _error(code: str, message: str, http_status: int) -> HTTPException:
@@ -224,6 +238,7 @@ def create_app(
             resolved_settings, data_dir=resolved_data_dir
         )
         application.state.data_dir = resolved_data_dir
+        application.state.secret_values = secrets + image_secrets
         (resolved_data_dir / "assets").mkdir(parents=True, exist_ok=True)
         application.mount(
             "/static/assets",
@@ -293,6 +308,23 @@ def create_app(
 
         return JSONResponse(
             status_code=_PUBLISH_ERROR_STATUS.get(exc.code, 400),
+            content={"error": {"code": exc.code, "message": exc.message}},
+        )
+
+    _PLAN_ERROR_STATUS: dict[str, int] = {
+        "PLAN_NO_CONTENT": 422,
+        "PLAN_LLM_NOT_CONFIGURED": 422,
+        "PLAN_EMPTY": 502,
+        "PLAN_LLM_ERROR": 502,
+        "PLAN_TIMEOUT": 504,
+    }
+
+    @application.exception_handler(PlanError)
+    async def handle_plan_error(_request: Request, exc: PlanError):
+        from fastapi.responses import JSONResponse
+
+        return JSONResponse(
+            status_code=_PLAN_ERROR_STATUS.get(exc.code, 400),
             content={"error": {"code": exc.code, "message": exc.message}},
         )
 
@@ -546,6 +578,56 @@ def create_app(
     async def cancel_image_run(run_id: str, request: Request):
         changed = await image_manager(request).cancel(run_id)
         return {"run_id": run_id, "cancelled": changed}
+
+    @application.get("/api/image-plan/defaults")
+    async def image_plan_defaults(request: Request):
+        settings_value: Settings = request.app.state.settings
+        models = request.app.state.registry.list_models()
+        default_model = next(
+            (
+                item
+                for item in models
+                if item["provider"] == settings_value.default_llm_provider
+            ),
+            models[0] if models else None,
+        )
+        return {
+            "role": DEFAULT_IMAGE_PLAN_ROLE,
+            "instructions": DEFAULT_IMAGE_PLAN_INSTRUCTIONS,
+            "models": models,
+            "default_model": default_model,
+        }
+
+    @application.post("/api/image-sessions/{session_id}/image-plan")
+    async def create_image_plan(
+        session_id: str, payload: ImagePlanCreateRequest, request: Request
+    ):
+        try:
+            return await asyncio.wait_for(
+                generate_image_plan(
+                    registry=request.app.state.registry,
+                    repository=repository(request),
+                    session_id=session_id,
+                    article_id=payload.article_id,
+                    version_id=payload.version_id,
+                    role=payload.role,
+                    instructions=payload.instructions,
+                    provider=payload.provider,
+                    model=payload.model,
+                    secret_values=request.app.state.secret_values,
+                ),
+                timeout=120,
+            )
+        except TimeoutError:
+            raise PlanError(
+                "PLAN_TIMEOUT", "配图编排超时（120s），请稍后重试。"
+            ) from None
+
+    @application.get("/api/image-sessions/{session_id}/image-plan")
+    async def get_image_plan(session_id: str, request: Request):
+        repository(request).get_image_session(session_id)
+        record = repository(request).get_image_plan(session_id)
+        return record["result"] if record else {"plan": None}
 
     @application.post("/api/assets")
     async def create_asset(payload: AssetCreate, request: Request):

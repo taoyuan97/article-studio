@@ -160,6 +160,21 @@ CREATE TABLE IF NOT EXISTS publish_records (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS image_plans (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES image_generation_sessions(id),
+    article_id TEXT,
+    version_id TEXT,
+    role TEXT NOT NULL,
+    instructions TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('completed','failed')),
+    result_json TEXT,
+    error_message TEXT,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_articles_updated ON articles(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_messages_conversation_sequence ON messages(conversation_id, sequence_number);
 CREATE INDEX IF NOT EXISTS idx_versions_article_number ON article_versions(article_id, version_number DESC);
@@ -168,6 +183,7 @@ CREATE INDEX IF NOT EXISTS idx_image_sessions_article ON image_generation_sessio
 CREATE INDEX IF NOT EXISTS idx_image_sessions_updated ON image_generation_sessions(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_image_messages_session ON image_generation_messages(session_id, sequence_number);
 CREATE INDEX IF NOT EXISTS idx_image_runs_session_status ON image_runs(session_id, status);
+CREATE INDEX IF NOT EXISTS idx_image_plans_session ON image_plans(session_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_assets_kind_updated ON assets(kind, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_assets_source_session ON assets(source_session_id);
 CREATE INDEX IF NOT EXISTS idx_publish_records_article ON publish_records(article_id, created_at DESC);
@@ -1139,6 +1155,66 @@ class Repository:
                 (message_id, session_id),
             ).fetchone()
         return _dict(row)
+
+    def save_image_plan(
+        self,
+        session_id: str,
+        *,
+        article_id: str,
+        version_id: str,
+        role: str,
+        instructions: str,
+        result: dict[str, Any],
+        provider: str,
+        model: str,
+    ) -> dict[str, Any]:
+        """覆盖式保存会话最近一次配图方案；result_json 存完整响应载荷（含统计）。"""
+        plan_id = str(uuid4())
+        with self.transaction() as connection:
+            session = connection.execute(
+                "SELECT id FROM image_generation_sessions WHERE id=?", (session_id,)
+            ).fetchone()
+            if session is None:
+                raise NotFoundError("配图会话不存在")
+            connection.execute(
+                "DELETE FROM image_plans WHERE session_id=?", (session_id,)
+            )
+            connection.execute(
+                """INSERT INTO image_plans
+                   (id,session_id,article_id,version_id,role,instructions,status,
+                    result_json,provider,model,created_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    plan_id,
+                    session_id,
+                    article_id,
+                    version_id,
+                    role,
+                    instructions,
+                    "completed",
+                    json.dumps(result, ensure_ascii=False),
+                    provider,
+                    model,
+                    now_iso(),
+                ),
+            )
+        return self.get_image_plan(session_id)
+
+    def get_image_plan(self, session_id: str) -> dict[str, Any] | None:
+        """会话最近一次配图方案；result 字段为完整响应载荷，无记录返回 None。"""
+        with self.connect() as connection:
+            row = connection.execute(
+                """SELECT id,session_id,article_id,version_id,role,instructions,status,
+                          result_json,provider,model,created_at
+                   FROM image_plans WHERE session_id=?
+                   ORDER BY created_at DESC LIMIT 1""",
+                (session_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        item = dict(row)
+        item["result"] = json.loads(item.pop("result_json") or "null")
+        return item
 
     def create_asset(
         self,

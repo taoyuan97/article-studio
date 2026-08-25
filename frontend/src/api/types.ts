@@ -221,6 +221,59 @@ export interface ImageRunResponse {
   events_url: string
 }
 
+// ---------- 配图计划线 ----------
+
+export type ImagePlanLayout = 'landscape' | 'square' | 'portrait'
+
+/** 单张配图：block_index 与发布 after_block_{n} 锚点同一编号 */
+export interface ImagePlanImage {
+  block_index: number
+  position_hint: string
+  layout: ImagePlanLayout
+  layout_reason: string
+  prompt: string
+}
+
+/** LLM 编排方案 */
+export interface ImagePlanResult {
+  mood: string
+  style_summary: string
+  images: ImagePlanImage[]
+}
+
+/** GET /api/image-plan/defaults */
+export interface ImagePlanDefaults {
+  role: string
+  instructions: string
+  models: AvailableModel[]
+  default_model: AvailableModel | null
+}
+
+/** POST/GET image-sessions/{id}/image-plan 响应；无记录时 plan 为 null */
+export interface ImagePlanResponse {
+  plan: ImagePlanResult | null
+  article_title?: string
+  article_id?: string
+  version_id?: string
+  word_count?: number
+  section_count?: number
+  block_count?: number
+  role?: string
+  instructions?: string
+  provider?: string
+  model?: string
+}
+
+/** POST image-sessions/{id}/image-plan 请求 */
+export interface ImagePlanGenerateRequest {
+  article_id: string
+  version_id?: string
+  role?: string
+  instructions?: string
+  provider: string
+  model: string
+}
+
 // ---------- 素材线 ----------
 
 export interface AssetMetadata {

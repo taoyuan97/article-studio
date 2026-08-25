@@ -36,6 +36,25 @@ class ArticleResult(BaseModel):
     kind: Literal["generation", "revision"]
 
 
+class ImagePlanImage(BaseModel):
+    """单张配图：block_index 与发布 after_block_{n} 锚点共用同一编号
+    （服务层统一 clamp 到 [1, 块总数]，LLM 原始输出可为任意整数）。"""
+
+    block_index: int
+    position_hint: str
+    layout: Literal["landscape", "square", "portrait"]
+    layout_reason: str
+    prompt: str
+
+
+class ImagePlanResult(BaseModel):
+    """文章配图编排方案（LLM 结构化输出）。images 可为空（由服务层判 PLAN_EMPTY）。"""
+
+    mood: str
+    style_summary: str
+    images: list[ImagePlanImage] = Field(default_factory=list)
+
+
 class CoreEvent(BaseModel):
     type: Literal[
         "assistant.delta",

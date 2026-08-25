@@ -2,10 +2,10 @@
 
 ## 1. 文档信息
 
-- 版本：v1.2
-- 状态：已实施（T001–T010 全部完成；v1.1 补记 T007–T010 公众号发布线设计；v1.2 补记 T012–T013 发布向导交互演进——封面/作者前置、正文画布块级锚点插图与 `after_block_{i}` 位置契约）
+- 版本：v1.3
+- 状态：已实施（T001–T010 全部完成；v1.1 补记 T007–T010 公众号发布线设计；v1.2 补记 T012–T013 发布向导交互演进——封面/作者前置、正文画布块级锚点插图与 `after_block_{i}` 位置契约；v1.3 补记 T015 配图计划线——`image_plans` 表、三个计划接口与 LLM 结构化编排链路、计划/行动双模式前端）
 - 创建日期：2026-08-23
-- 关联文档：`docs/prd/prd.md`（产品需求）、`docs/task/`（任务拆分：T001–T013）
+- 关联文档：`docs/prd/prd.md`（产品需求）、`docs/task/`（任务拆分：T001–T015）
 - 迁移源：`prototype/article-agent-mvp/backend`（契约基准：`backend/tests/test_frontend_contract.py`）
 
 ## 2. 总体架构
@@ -174,6 +174,14 @@ GET    /api/image-runs/{run_id}/events              配图运行 SSE
 POST   /api/image-runs/{run_id}/cancel              取消配图运行
 ```
 
+配图计划线（T015，同步请求、无 SSE；POST 超时 120s 兜底）：
+
+```text
+GET    /api/image-plan/defaults                     默认角色/编排指令 + 可用 LLM 模型列表
+POST   /api/image-sessions/{id}/image-plan          一键编排配图提示词方案 → 200 {plan, 统计}
+GET    /api/image-sessions/{id}/image-plan          最近一条方案（无记录 → {plan: null}）
+```
+
 素材线：
 
 ```text
@@ -233,7 +241,7 @@ run 响应结构（两条线同构）：
 
 ### 5.4 数据存储
 
-- `data/article.sqlite3`：articles、conversations、messages、article_versions、generation_runs、image_generation_sessions、image_generation_messages、image_runs、assets、publish_records（T008：发布记录，含 theme/cover/author/image_placements/content_snapshot/status/media_id/error_code/error_message）。
+- `data/article.sqlite3`：articles、conversations、messages、article_versions、generation_runs、image_generation_sessions、image_generation_messages、image_runs、assets、publish_records（T008：发布记录，含 theme/cover/author/image_placements/content_snapshot/status/media_id/error_code/error_message）、image_plans（T015：配图方案，每会话覆盖式保留最近一条，含 role/instructions/provider/model/result_json）。
 - `data/checkpoints.sqlite3`：LangGraph AsyncSqliteSaver。
 - `data/assets/`：图片文件。
 - `data/publish_tmp/`：发布组装 Markdown 临时文件（发布结束即删，快照持久化于 publish_records）。
@@ -261,6 +269,14 @@ PUBLISH_FAKE_MODE=false   # true 时不启动子进程、不外呼（开发/测�
 - **插图位置契约（T013）**：`image_placements[].position` 支持 `top` / `bottom` / `after_section_{n}`（历史兼容）/ `after_block_{i}`（块级，全局 1 起编号）。`split_blocks` 供 `POST /api/publish/preview` 返回 `blocks`（`{index, kind, preview, text}`），是前端画布渲染与组装锚点的**单一事实源**（与 `build_publish_markdown` 共用 `_walk_blocks`，编号不漂移）；`after_block_{i}` 越界返回 `PUBLISH_PLACEMENT_INVALID`。
 - **`POST /api/publish/render-preview`（T014）**：请求 = `PublishPreviewRequest` 全字段 + `theme_id`（必填）+ `markdown`（可选，编辑终稿覆盖——提供时跳过组装直接渲染，仍做路径映射）→ 组装（或覆盖）→ `map_local_paths_to_static` → `render_markdown` → `{html}`；前端 React Query 按 `articleId/versionId/placements/cover/author/themeId/编辑内容` 作 key 缓存复用，切主题即时重渲染。
 - **前端**：`PublishPage` 三步向导（版本和信息（文章/版本下拉、`CoverPickerModal` 封面弹窗单选（封面独立于正文配图，切文章重置/切版本保留）、作者）→ 配图与位置（`ArticleCanvas` 正文画布块级渲染 + 点击块设锚点（插入指示线），`ImagePickerModal` 插图弹窗多选（本文配图置顶 + 素材库图片，已插入置灰），确定后按勾选顺序内联插入锚点后；已插图内联展示 hover 删除；切版本失效锚点 sanitize 退到文末并提示）→ 选主题（左侧主题卡列表 + 右侧 `ThemePreviewPanel` 手机框预览（iframe sandbox + srcDoc），选中即渲染、未选空态引导；预览默认只读，【编辑】原位切换 TextArea、完成编辑后以终稿重渲染；组装输入变化清除编辑态；发布（同步等待 120s、成功 media_id / 失败错误码映射文案可重试）同屏呈现））；`PublishRecordsPage` 列表（状态筛选、失败展开错误、按文章过滤）；快照详情页只读渲染（frontmatter 剥离 + 本地路径图片映射回 /static + MarkdownView 白名单）。
+
+### 5.7 配图计划线设计（T015）
+
+- **`app/plan_service.py`**：`generate_image_plan(...)` 同步编排——解析文章版本（`version_id` 空则取 `current_version_id`，无版本 → `PLAN_NO_CONTENT`）→ 组装输入（全文 + `split_sections` 章节数 + `split_blocks` 块编号清单（`{index, kind, preview}`）+ 后端计算字数）→ `registry.get_chat_model(provider, model).with_structured_output(ImagePlanResult, method="json_mode")` 一次调用 → 校验（`block_index` clamp 到 [1, 块总数] 并按位置去重保留首个；`images` 空 → `PLAN_EMPTY`）→ 覆盖式持久化 `image_plans` 并返回完整载荷（GET 原样回放，刷新可恢复）。
+- **schema（`article_agent/models.py`）**：`ImagePlanImage{block_index, position_hint, layout(landscape|square|portrait), layout_reason, prompt}` + `ImagePlanResult{mood, style_summary, images[]}`；`block_index` 与 T013 发布锚点 `after_block_{n}` 共用 `split_blocks` 编号（单一事实源，天然对齐）。
+- **默认提示词（`article_agent/prompts.py`）**：`DEFAULT_IMAGE_PLAN_ROLE`（资深视觉编辑与插画艺术指导）+ `DEFAULT_IMAGE_PLAN_INSTRUCTIONS`（数量按字数映射（<1500 字 2-3 张 / 1500-3000 字 3-5 张 / 3000-6000 字 5-7 张 / >6000 字 7-9 张）、五感/空间/动作/情绪反差四项评分筛选高视觉潜力段落、统一风格前缀、默认中文输出）+ `IMAGE_PLAN_SYSTEM_PROMPT`（约束结构化输出）；role/instructions 用户可改，空值回填默认。
+- **错误码**：`PLAN_NO_CONTENT`(422) / `PLAN_LLM_NOT_CONFIGURED`(422) / `PLAN_LLM_ERROR`(502，`redact_sensitive` 脱敏) / `PLAN_TIMEOUT`(504，`asyncio.wait_for` 120s) / `PLAN_EMPTY`(502)；会话不存在沿用 404。
+- **前端**：`ImageWorkspacePage` 顶部 `Segmented`「计划/行动」（默认行动，模式按会话持久化 localStorage，与 tier/ratio 同机制；生图运行或编排 pending 时锁定切换）；计划模式左栏 `ImagePlanForm`（文章→版本联动 Select、LLM 模型 Select（只显示模型名）、角色/指令 TextArea（defaults 回填、最近方案回填）），右栏 `ImagePlanResults`（统计条 + 配图卡片（`#序号 · 第 n 块后 · 位置说明 · 排版标签`、prompt 预格式块、复制按钮（`clipboard.writeText` + `execCommand` 兜底，「已复制」反馈））、空态引导、错误 Banner + 重试、loading Spin）；API 封装 `src/api/imagePlan.ts`。
 
 CORS：开发模式继续允许 `http://localhost:5173` / `http://127.0.0.1:5173`（Vite dev server 默认端口，兜底直连场景）；开发主路径走 Vite proxy（同源，不触发 CORS）。
 

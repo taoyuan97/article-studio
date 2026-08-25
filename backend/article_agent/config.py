@@ -56,7 +56,9 @@ class Settings(BaseSettings):
 
     llm_timeout_seconds: float = Field(default=180, gt=0)
     llm_max_retries: int = Field(default=2, ge=0)
-    llm_max_output_tokens: int = Field(default=4096, gt=0)
+    # 推理模型的思考 token 计入输出预算，多字段结构化输出需预留充足余量
+    # （见 docs/issue/ISSUE-003-image-plan-output-truncated.md）
+    llm_max_output_tokens: int = Field(default=16384, gt=0)
     llm_context_usage_ratio: float = Field(default=0.80, gt=0, le=0.80)
     llm_recent_message_limit: int = Field(default=12, gt=0)
 

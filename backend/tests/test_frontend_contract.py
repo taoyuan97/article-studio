@@ -65,17 +65,20 @@ def test_api_and_sse_contract_is_wired():
     client = read("src/api/client.ts")
     articles = read("src/api/articles.ts")
     image_sessions = read("src/api/imageSessions.ts")
+    image_plan = read("src/api/imagePlan.ts")
     assets = read("src/api/assets.ts")
-    api_sources = client + articles + image_sessions + assets
+    api_sources = client + articles + image_sessions + image_plan + assets
     for path in (
         "/api/health",
         "/api/stats",
         "/api/articles",
         "/api/image-sessions",
+        "/api/image-plan/defaults",
         "/api/image-runs/",
         "/api/assets",
         "/workspace",
         "/messages",
+        "/image-plan",
         "/retry",
         "/versions",
         "/cancel",

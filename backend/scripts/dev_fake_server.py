@@ -9,6 +9,8 @@ data_dir）挂载假 LLM 与假生图 provider，其余 API、SSE、SQLite 行�
   SIMULATED_FAILURE，用于验证失败卡片与重新发送；历史消息与压缩转录中的
   「失败」字样不影响运行——正文模板本身含「失败」二字，故用更长的触发词）。
 - 生图：提示词包含「触发失败」→ 延迟后生成失败，用于验证失败卡片。
+- 配图计划：编排指令（或角色）包含「触发失败」→ 延迟后抛错，验证
+  PLAN_LLM_ERROR 错误路径；正常请求返回罐头方案（3 张图、三种排版）。
 - 发布：最新用户消息包含「触发发布失败」→ 生成正文末尾嵌入同名标记，
   发布线 fake 模式（wenyan_client）据此抛 PUBLISH_MCP_ERROR，用于验证
   发布失败记录与重试；发布凭据为假值且 PUBLISH_FAKE_MODE=true，不外呼。
@@ -43,7 +45,13 @@ from article_agent.image_providers import (  # noqa: E402
     ImageProviderRegistry,
     ImageResult,
 )
-from article_agent.models import ArticleBrief, IntentDecision, UserIntent  # noqa: E402
+from article_agent.models import (  # noqa: E402
+    ArticleBrief,
+    ImagePlanImage,
+    ImagePlanResult,
+    IntentDecision,
+    UserIntent,
+)
 from article_agent.registry import (  # noqa: E402
     ModelCapabilities,
     ModelRegistry,
@@ -108,11 +116,51 @@ def _latest_human_text(messages: list) -> str:
     return ""
 
 
+def _fake_image_plan() -> ImagePlanResult:
+    """罐头配图方案：3 张图覆盖三种排版，文案带编号便于 E2E 断言。"""
+    return ImagePlanResult(
+        mood="温暖治愈",
+        style_summary="暖色调水彩手绘插画，柔和光影，统一呈现静谧治愈的氛围",
+        images=[
+            ImagePlanImage(
+                block_index=1,
+                position_hint="开篇引入，奠定全文视觉基调",
+                layout="landscape",
+                layout_reason="开篇横版大图，承载场景全景并留出下方呼吸空间",
+                prompt="暖色调水彩插画：清晨的咖啡馆内景，木桌上一杯冒着热气的拿铁，"
+                "柔和晨光透过玻璃窗洒落，温暖治愈氛围，横版构图（假模型方案一）",
+            ),
+            ImagePlanImage(
+                block_index=2,
+                position_hint="中段要点处强化记忆",
+                layout="square",
+                layout_reason="方图适配段落间留白，聚焦单点意象",
+                prompt="暖色调水彩插画：一盏台灯下摊开的笔记本与钢笔，纸页微卷，"
+                "暖黄光晕环绕，静谧治愈氛围，居中构图（假模型方案二）",
+            ),
+            ImagePlanImage(
+                block_index=3,
+                position_hint="结语处收束呼应主题",
+                layout="portrait",
+                layout_reason="竖版收尾呼应纵向滚动阅读，视觉重心上移",
+                prompt="暖色调水彩插画：暮色中的城市天际线与一扇亮灯的窗，"
+                "远山剪影，温暖治愈氛围，竖版构图（假模型方案三）",
+            ),
+        ],
+    )
+
+
 class _ScriptedStructuredModel:
-    def __init__(self, parent: "ScriptedFakeChatModel") -> None:
+    def __init__(self, parent: "ScriptedFakeChatModel", schema: type) -> None:
         self.parent = parent
+        self.schema = schema
 
     async def ainvoke(self, messages: list, config: dict | None = None):
+        if self.schema is ImagePlanResult:
+            if "触发失败" in _latest_human_text(messages):
+                await asyncio.sleep(0.5)
+                raise RuntimeError("模拟的编排错误：SIMULATED_FAILURE（已脱敏）")
+            return _fake_image_plan()
         intent = (
             UserIntent.GENERATE if self.parent.generation_count == 0 else UserIntent.REVISE
         )
@@ -127,7 +175,7 @@ class ScriptedFakeChatModel:
         self.chunk_delay = chunk_delay
 
     def with_structured_output(self, schema: type, **kwargs: object):
-        return _ScriptedStructuredModel(self)
+        return _ScriptedStructuredModel(self, schema)
 
     def _next_article(self) -> str:
         self.generation_count += 1

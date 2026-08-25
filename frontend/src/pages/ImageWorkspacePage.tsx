@@ -1,19 +1,25 @@
 import { useCallback, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router-dom'
-import { App, Button, Input, Modal, Progress, Select, Spin } from 'antd'
+import { App, Button, Input, Modal, Progress, Segmented, Select, Spin } from 'antd'
 import { assetsApi } from '../api/assets'
 import type { ApiError } from '../api/client'
+import { imagePlanApi } from '../api/imagePlan'
 import { imageSessionsApi } from '../api/imageSessions'
-import type { ImageWorkspace } from '../api/types'
+import type { ImagePlanGenerateRequest, ImagePlanResponse, ImageWorkspace } from '../api/types'
 import StatusBanner from '../components/StatusBanner'
 import ImageMessageList, { type ImageFailureInfo } from '../features/image-workspace/ImageMessageList'
 import ImageParamsPopover from '../features/image-workspace/ImageParamsPopover'
+import ImagePlanForm from '../features/image-workspace/ImagePlanForm'
+import ImagePlanResults from '../features/image-workspace/ImagePlanResults'
 import {
+  loadSessionMode,
   loadSessionParams,
   normalizeParams,
+  saveSessionMode,
   saveSessionParams,
   type ImageParams,
+  type ImageWorkspaceMode,
 } from '../features/image-workspace/params'
 import { useImageRunStream } from '../hooks/useImageRunStream'
 import { formatDate, providerLabel, resolveImageUrl } from '../lib/format'
@@ -21,10 +27,11 @@ import type { ImageRunEventType, RunEventData } from '../lib/sse'
 
 /**
  * 配图工作台（专注模式）：
- * - 左：会话对话（prompt / 生成结果 / 失败卡片）+ 输入区（provider / 图片参数 / 停止 / 发送）；
- * - 右：当前图片预览（进度 / 图片 / 保存素材）；
+ * - 「计划/行动」双模式（默认行动，决策 ⑤）：
+ *   - 行动：会话对话 + 输入区（provider / 图片参数 / 停止 / 发送）+ 图片预览；
+ *   - 计划：文章版本选择 + 角色/指令编排 → LLM 一键编排配图提示词方案（可复制）；
  * - SSE：image.progress / image.completed / image.failed / run.*；
- * - 参数（tier / ratio）随发送指令提交并持久化回显；重新进入自动恢复历史与活动运行。
+ * - 参数（tier / ratio / mode）随会话持久化回显；重新进入自动恢复历史与活动运行。
  */
 export default function ImageWorkspacePage() {
   const { sessionId } = useParams<{ sessionId: string }>()
@@ -76,6 +83,44 @@ export default function ImageWorkspacePage() {
         rawParams.ratio,
       ),
     [effectiveProvider?.provider, rawParams],
+  )
+
+  // ---------- 计划/行动模式（持久化回显，默认行动） ----------
+  const [mode, setMode] = useState<ImageWorkspaceMode>(() =>
+    sessionId ? loadSessionMode(sessionId) : 'action',
+  )
+
+  // ---------- 计划模式：最近方案恢复 + 一键编排 ----------
+  const latestPlanQuery = useQuery({
+    queryKey: ['image-plan-latest', sessionId],
+    queryFn: () => imagePlanApi.getLatest(sessionId!),
+    enabled: mode === 'plan' && Boolean(sessionId),
+    staleTime: Infinity,
+    retry: false,
+  })
+  // 最近一次生成结果（优先于已恢复方案展示）
+  const [generatedPlan, setGeneratedPlan] = useState<ImagePlanResponse | null>(null)
+
+  const planMutation = useMutation({
+    mutationFn: (payload: ImagePlanGenerateRequest) =>
+      imagePlanApi.generate(sessionId!, payload),
+    onSuccess: (data) => {
+      setGeneratedPlan(data)
+      message.success('配图方案已生成')
+    },
+  })
+
+  const planData = generatedPlan ?? latestPlanQuery.data ?? null
+  const modeDisabled = running || planMutation.isPending
+  const statusRunning = running || (mode === 'plan' && planMutation.isPending)
+
+  const handleModeChange = useCallback(
+    (next: ImageWorkspaceMode) => {
+      if (modeDisabled || next === mode) return
+      setMode(next)
+      if (sessionId) saveSessionMode(sessionId, next)
+    },
+    [mode, modeDisabled, sessionId],
   )
 
   const invalidateWorkspace = useCallback(() => {
@@ -240,6 +285,19 @@ export default function ImageWorkspacePage() {
 
   const alreadySaved = selectedImage ? savedMessageIds.has(selectedImage.id) : false
 
+  const modeSegmented = (
+    <Segmented
+      aria-label="工作模式"
+      value={mode}
+      options={[
+        { label: '计划', value: 'plan' },
+        { label: '行动', value: 'action' },
+      ]}
+      onChange={(value) => handleModeChange(value as ImageWorkspaceMode)}
+      disabled={modeDisabled}
+    />
+  )
+
   return (
     <div className="image-workspace" aria-busy={workspaceQuery.isPending}>
       <div className="workspace-topbar">
@@ -249,8 +307,8 @@ export default function ImageWorkspacePage() {
             {session?.title || (workspaceQuery.isPending ? '载入中……' : '未命名配图')}
           </h1>
         </div>
-        <span className="status-pill" data-running={String(running)} aria-live="polite">
-          {running ? '正在生成' : '准备就绪'}
+        <span className="status-pill" data-running={String(statusRunning)} aria-live="polite">
+          {running ? '正在生成' : statusRunning ? '正在编排' : '准备就绪'}
         </span>
       </div>
 
@@ -264,106 +322,155 @@ export default function ImageWorkspacePage() {
       )}
 
       <div className="workspace-grid workspace-grid-image">
-        <section className="workspace-panel" aria-label="会话对话">
-          <div className="workspace-panel-heading">
-            <h2 className="workspace-panel-title">历史对话</h2>
-          </div>
-          {workspaceQuery.isPending ? (
-            <div className="workspace-panel-body workspace-loading">
-              <Spin />
-            </div>
-          ) : (
-            <ImageMessageList
-              messages={messages}
-              failure={failure}
-              selectedImageId={selectedImage?.id ?? null}
-              onSelectImage={(item) => setSelectedImageId(item.id)}
-            />
-          )}
-          <div className="composer">
-            <Input.TextArea
-              value={inputValue}
-              onChange={(event) => setInputValue(event.target.value)}
-              disabled={workspaceQuery.isPending}
-              rows={4}
-              maxLength={100_000}
-              placeholder="描述你想要的画面，例如：一张清晨咖啡馆的插画，暖色调……"
-            />
-            <div className="composer-actions">
-              <ImageParamsPopover
-                provider={effectiveProvider?.provider ?? 'aliyun_wanxiang'}
-                tier={params.tier}
-                ratio={params.ratio}
-                disabled={workspaceQuery.isPending || running}
-                onChange={(next) => setRawParams(next)}
-              />
-              <Select
-                className="provider-select"
-                aria-label="选择生图模型"
-                value={effectiveProvider ? `${effectiveProvider.provider}|${effectiveProvider.model}` : undefined}
-                options={providers.map((item) => ({
-                  value: `${item.provider}|${item.model}`,
-                  label: `${providerLabel(item.provider)} · ${item.model}`,
-                }))}
-                disabled={workspaceQuery.isPending || running || providers.length === 0}
-                onChange={(value: string) => setProviderKey(value)}
-                style={{ minWidth: 200 }}
-                notFoundContent="未配置可用的生图模型"
-              />
-              <div className="composer-spacer" />
-              {running && (
-                <Button danger onClick={handleCancel}>
-                  停止
-                </Button>
-              )}
-              <Button
-                type="primary"
-                loading={sendMutation.isPending}
-                disabled={running || !inputValue.trim() || !effectiveProvider}
-                onClick={handleSend}
-              >
-                发送
-              </Button>
-            </div>
-          </div>
-        </section>
-
-        <section className="workspace-panel" aria-label="当前图片">
-          <div className="workspace-panel-heading">
-            <h2 className="workspace-panel-title">当前图片</h2>
-            {selectedImage?.image_url && !running && (
-              <Button
-                size="small"
-                disabled={alreadySaved}
-                onClick={openSaveModal}
-                loading={saveMutation.isPending}
-              >
-                {alreadySaved ? '已保存' : '保存素材'}
-              </Button>
-            )}
-          </div>
-          <div className="workspace-panel-body image-preview-body">
-            {running && (
-              <div className="image-progress">
-                <span className="image-progress-label">生成中……</span>
-                <Progress percent={progress ?? 0} status="active" />
+        {mode === 'plan' ? (
+          <>
+            <section className="workspace-panel" aria-label="计划配置">
+              <div className="workspace-panel-heading">
+                <h2 className="workspace-panel-title">计划配置</h2>
               </div>
-            )}
-            {selectedImage?.image_url ? (
-              <figure className="image-preview">
-                <img src={resolveImageUrl(selectedImage.image_url)} alt="当前图片" />
-                <figcaption>生成于 {formatDate(selectedImage.created_at)}</figcaption>
-              </figure>
-            ) : (
-              !running && (
-                <div className="article-empty">
-                  <h3>图片会在这里出现</h3>
-                  <p>输入画面描述并发送，生成完成后可保存到素材库。</p>
+              {workspaceQuery.isPending ? (
+                <div className="workspace-panel-body workspace-loading">
+                  <Spin />
                 </div>
-              )
-            )}
-          </div>
-        </section>
+              ) : (
+                <div className="workspace-panel-body image-plan-form-body">
+                  <ImagePlanForm
+                    sessionArticleId={session?.article_id ?? null}
+                    latestPlan={latestPlanQuery.data ?? null}
+                    latestPlanLoaded={latestPlanQuery.isSuccess || latestPlanQuery.isError}
+                    pending={planMutation.isPending}
+                    onGenerate={(payload) => planMutation.mutate(payload)}
+                  />
+                </div>
+              )}
+              <div className="composer">
+                <div className="composer-actions">
+                  {modeSegmented}
+                  <span className="image-plan-mode-hint">计划：编排文章配图与提示词</span>
+                </div>
+              </div>
+            </section>
+            <section className="workspace-panel" aria-label="配图方案">
+              <div className="workspace-panel-heading">
+                <h2 className="workspace-panel-title">配图方案</h2>
+              </div>
+              <div className="workspace-panel-body image-plan-results-body">
+                <ImagePlanResults
+                  data={planData}
+                  pending={planMutation.isPending}
+                  error={(planMutation.error as ApiError | null) ?? null}
+                  onRetry={() => {
+                    if (planMutation.variables) planMutation.mutate(planMutation.variables)
+                  }}
+                />
+              </div>
+            </section>
+          </>
+        ) : (
+          <>
+            <section className="workspace-panel" aria-label="会话对话">
+              <div className="workspace-panel-heading">
+                <h2 className="workspace-panel-title">历史对话</h2>
+              </div>
+              {workspaceQuery.isPending ? (
+                <div className="workspace-panel-body workspace-loading">
+                  <Spin />
+                </div>
+              ) : (
+                <ImageMessageList
+                  messages={messages}
+                  failure={failure}
+                  selectedImageId={selectedImage?.id ?? null}
+                  onSelectImage={(item) => setSelectedImageId(item.id)}
+                />
+              )}
+              <div className="composer">
+                <Input.TextArea
+                  value={inputValue}
+                  onChange={(event) => setInputValue(event.target.value)}
+                  disabled={workspaceQuery.isPending}
+                  rows={4}
+                  maxLength={100_000}
+                  placeholder="描述你想要的画面，例如：一张清晨咖啡馆的插画，暖色调……"
+                />
+                <div className="composer-actions">
+                  {modeSegmented}
+                  <ImageParamsPopover
+                    provider={effectiveProvider?.provider ?? 'aliyun_wanxiang'}
+                    tier={params.tier}
+                    ratio={params.ratio}
+                    disabled={workspaceQuery.isPending || running}
+                    onChange={(next) => setRawParams(next)}
+                  />
+                  <Select
+                    className="provider-select"
+                    aria-label="选择生图模型"
+                    value={effectiveProvider ? `${effectiveProvider.provider}|${effectiveProvider.model}` : undefined}
+                    options={providers.map((item) => ({
+                      value: `${item.provider}|${item.model}`,
+                      label: `${providerLabel(item.provider)} · ${item.model}`,
+                    }))}
+                    disabled={workspaceQuery.isPending || running || providers.length === 0}
+                    onChange={(value: string) => setProviderKey(value)}
+                    style={{ minWidth: 200 }}
+                    notFoundContent="未配置可用的生图模型"
+                  />
+                  <div className="composer-spacer" />
+                  {running && (
+                    <Button danger onClick={handleCancel}>
+                      停止
+                    </Button>
+                  )}
+                  <Button
+                    type="primary"
+                    loading={sendMutation.isPending}
+                    disabled={running || !inputValue.trim() || !effectiveProvider}
+                    onClick={handleSend}
+                  >
+                    发送
+                  </Button>
+                </div>
+              </div>
+            </section>
+
+            <section className="workspace-panel" aria-label="当前图片">
+              <div className="workspace-panel-heading">
+                <h2 className="workspace-panel-title">当前图片</h2>
+                {selectedImage?.image_url && !running && (
+                  <Button
+                    size="small"
+                    disabled={alreadySaved}
+                    onClick={openSaveModal}
+                    loading={saveMutation.isPending}
+                  >
+                    {alreadySaved ? '已保存' : '保存素材'}
+                  </Button>
+                )}
+              </div>
+              <div className="workspace-panel-body image-preview-body">
+                {running && (
+                  <div className="image-progress">
+                    <span className="image-progress-label">生成中……</span>
+                    <Progress percent={progress ?? 0} status="active" />
+                  </div>
+                )}
+                {selectedImage?.image_url ? (
+                  <figure className="image-preview">
+                    <img src={resolveImageUrl(selectedImage.image_url)} alt="当前图片" />
+                    <figcaption>生成于 {formatDate(selectedImage.created_at)}</figcaption>
+                  </figure>
+                ) : (
+                  !running && (
+                    <div className="article-empty">
+                      <h3>图片会在这里出现</h3>
+                      <p>输入画面描述并发送，生成完成后可保存到素材库。</p>
+                    </div>
+                  )
+                )}
+              </div>
+            </section>
+          </>
+        )}
       </div>
 
       <Modal

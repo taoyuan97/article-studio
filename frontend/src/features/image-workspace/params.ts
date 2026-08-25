@@ -66,3 +66,26 @@ export function saveSessionParams(sessionId: string, params: ImageParams): void 
     // 存储不可用时静默降级（仅影响回显）
   }
 }
+
+const MODE_STORAGE_KEY_PREFIX = 'image-mode:'
+
+export type ImageWorkspaceMode = 'action' | 'plan'
+
+/** 读取会话上次使用的模式（默认「行动」，决策 ⑤） */
+export function loadSessionMode(sessionId: string): ImageWorkspaceMode {
+  try {
+    const raw = window.localStorage.getItem(MODE_STORAGE_KEY_PREFIX + sessionId)
+    return raw === 'plan' ? 'plan' : 'action'
+  } catch {
+    return 'action'
+  }
+}
+
+/** 模式切换后持久化（同一浏览器内回显） */
+export function saveSessionMode(sessionId: string, mode: ImageWorkspaceMode): void {
+  try {
+    window.localStorage.setItem(MODE_STORAGE_KEY_PREFIX + sessionId, mode)
+  } catch {
+    // 存储不可用时静默降级（仅影响回显）
+  }
+}

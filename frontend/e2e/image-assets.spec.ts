@@ -1,10 +1,11 @@
-import { expect, test } from '@playwright/test'
-import { SAVE_BUTTON, SEND_BUTTON } from './helpers'
+import { expect, test, type Page } from '@playwright/test'
+import { SAVE_BUTTON, SEND_BUTTON, createArticleViaApi, sendViaApiAndAwaitVersion } from './helpers'
 
 /**
  * 配图与素材主路径（假生图 provider，无真实 API Key）：
  * 新建会话 → 发送 → SSE 进度 → 完成 → 保存素材 → 素材库可见 → 详情回链。
- * 附加覆盖：生图失败卡片（脱敏详情）。
+ * 附加覆盖：生图失败卡片（脱敏详情）；计划/行动双模式（一键编排、复制、
+ * 刷新恢复、编排失败）。
  */
 
 test.describe('配图与素材主路径', () => {
@@ -74,5 +75,66 @@ test.describe('配图与素材主路径', () => {
     // 失败不产生图片
     await expect(page.locator('.image-message-thumb')).toHaveCount(0)
     await expect(page.getByText('图片会在这里出现')).toBeVisible()
+  })
+})
+
+test.describe('配图工作台：计划/行动双模式', () => {
+  // Chromium 下 navigator.clipboard.writeText 需要授权，否则复制按钮走兜底路径
+  test.use({ permissions: ['clipboard-write'] })
+
+  /** 准备一篇有版本的文章（计划模式编排对象），并新建配图会话进入工作台 */
+  async function prepareSessionWithArticle(page: Page) {
+    const articleId = await createArticleViaApi(page)
+    await sendViaApiAndAwaitVersion(page, articleId, '写一篇短文', 1)
+
+    await page.goto('/assets')
+    await page.getByRole('button', { name: '新建配图' }).first().click()
+    await expect(page).toHaveURL(/\/image-sessions\/[0-9a-f-]{36}$/)
+    // 默认行动模式：图片参数按钮可见
+    await expect(page.getByRole('button', { name: /图片参数/ })).toBeVisible()
+  }
+
+  test('计划模式：一键编排 → 方案卡片 → 复制提示词 → 刷新恢复', async ({ page }) => {
+    await prepareSessionWithArticle(page)
+
+    // 切换到计划模式：图片参数按钮隐藏，表单出现
+    await page.getByText('计划', { exact: true }).click()
+    await expect(page.locator('.image-plan-form')).toBeVisible()
+    await expect(page.getByRole('button', { name: /图片参数/ })).toHaveCount(0)
+
+    // 文章（最新创建者自动预选）→ 一键编排（罐头方案：3 张配图、三种排版）
+    await page.getByRole('button', { name: '一键编排' }).click()
+    await expect(page.locator('.image-plan-card')).toHaveCount(3, { timeout: 30_000 })
+    await expect(page.getByText('温暖治愈', { exact: true })).toBeVisible()
+    await expect(page.getByText('假模型方案一', { exact: false })).toBeVisible()
+    await expect(page.getByText('假模型方案三', { exact: false })).toBeVisible()
+
+    // 复制提示词：按钮反馈「已复制」
+    await page.getByRole('button', { name: '复制提示词 1' }).click()
+    await expect(page.getByText('已复制', { exact: true })).toBeVisible()
+
+    // 决策 ②：结果入库保留最近一条，刷新后方案与模式均恢复
+    await page.reload()
+    await expect(page.locator('.image-plan-card')).toHaveCount(3, { timeout: 30_000 })
+    await expect(page.getByText('温暖治愈', { exact: true })).toBeVisible()
+
+    // 切回行动模式：恢复生图工作流
+    await page.getByText('行动', { exact: true }).click()
+    await expect(page.getByRole('button', { name: /图片参数/ })).toBeVisible()
+  })
+
+  test('计划模式：编排失败 → 错误提示（脱敏）', async ({ page }) => {
+    await prepareSessionWithArticle(page)
+
+    await page.getByText('计划', { exact: true }).click()
+    await expect(page.locator('.image-plan-form')).toBeVisible()
+
+    // 假模型约定：编排指令含「触发失败」→ 延迟 0.5s 后抛错
+    await page.getByLabel('编排指令').fill('请让这次触发失败')
+    await page.getByRole('button', { name: '一键编排' }).click()
+
+    await expect(page.getByText(/配图编排失败/)).toBeVisible({ timeout: 30_000 })
+    // 失败不产生方案卡片
+    await expect(page.locator('.image-plan-card')).toHaveCount(0)
   })
 })
