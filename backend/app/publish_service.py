@@ -211,6 +211,29 @@ def _yaml_quote(value: str) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
+def map_local_paths_to_static(
+    markdown: str, assets: dict[str, dict[str, Any]], data_dir: Path
+) -> str:
+    """Map local absolute image paths in assembled markdown back to /static URLs.
+
+    The inverse of resolve_image_path: the assembled markdown carries local
+    absolute paths (required by wenyan-mcp upload), but browser previews need
+    same-origin /static URLs. Covers both frontmatter `cover:` and body
+    `![](...)` occurrences. http(s) URLs pass through untouched.
+    """
+    for asset in assets.values():
+        storage_url = asset["storage_url"]
+        if not storage_url.startswith("/static/"):
+            continue
+        relative = storage_url[len("/static") :].lstrip("/")
+        local_path = str((data_dir / relative).resolve())
+        # frontmatter values go through _yaml_quote (json.dumps), which escapes
+        # backslashes on Windows — replace both raw and escaped forms.
+        for needle in (local_path, json.dumps(local_path)[1:-1]):
+            markdown = markdown.replace(needle, storage_url)
+    return markdown
+
+
 def build_publish_markdown(
     *,
     title: str,

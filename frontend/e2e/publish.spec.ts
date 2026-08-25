@@ -3,7 +3,6 @@ import { createArticleViaApi, sendViaApiAndAwaitVersion } from './helpers'
 
 /** AntD 两字按钮自动插空格（「下一步」→「下 一 步」），用正则兼容 */
 const NEXT_STEP = /^下\s*一\s*步$/
-const PREV_STEP = /^上\s*一\s*步$/
 const RETRY_BUTTON = /^重\s*试\s*发\s*布$/
 
 interface ImageMessageLike {
@@ -54,8 +53,9 @@ async function createImageAssetViaApi(
 }
 
 /**
- * 发布线 E2E（fake 模式：假模型/假生图 + PUBLISH_FAKE_MODE，不触真实微信接口）：
- * - 主路径：工作台入口 → 四步向导（配图/位置/封面/作者）→ 预览组装 → 发布成功
+ * 发布线 E2E（fake 模式：假模型/假生图 + PUBLISH_FAKE_MODE，不触真实微信接口；
+ * 主题预览为本地 node + wenyan core 真实渲染，无需微信凭据）：
+ * - 主路径：工作台入口 → 三步向导（配图/位置/封面/作者）→ 选主题（预览 + 编辑）→ 发布成功
  *   （FAKE media_id）→ 发布记录列表与快照详情；
  * - 校验路径：未选主题时发布按钮禁用；正文含「触发发布失败」标记时发布失败
  *   （PUBLISH_MCP_ERROR，40164 文案），失败记录可展开错误详情。
@@ -116,12 +116,22 @@ test.describe('发布线场景', () => {
     await pickerDialog2.getByRole('button', { name: /^确\s*定（已选 1 张）$/ }).click()
     await expect(blockWrap(6).locator('.publish-canvas-image-title')).toHaveText('配图二')
 
-    // 步骤 3：主题默认选中 default
+    // 步骤 3：选主题——未选主题时预览空态，发布按钮禁用
     await page.getByRole('button', { name: NEXT_STEP }).click()
-    await expect(page.locator('.publish-theme-card.is-selected')).toHaveCount(1)
+    await expect(page.getByText('请选择主题查看排版效果')).toBeVisible()
+    await expect(page.getByRole('button', { name: '发布到公众号草稿箱' })).toBeDisabled()
 
-    // 步骤 4：预览组装结果（frontmatter + 两张图 + 图片位置）
-    await page.getByRole('button', { name: NEXT_STEP }).click()
+    // 点选 Default 主题 → 手机框预览渲染（真实 wenyan core 渲染，冷启动 1~3s）
+    await page.locator('.publish-theme-card', { hasText: 'Default' }).click()
+    const previewFrame = page.locator('iframe[title="主题预览"]')
+    await expect(previewFrame).toBeVisible({ timeout: 30_000 })
+    await expect(previewFrame).toHaveAttribute(
+      'srcdoc',
+      expect.stringContaining('<section id="wenyan"'),
+    )
+
+    // 编辑模式：查看组装结果源码（frontmatter + 两张图 + 图片位置），完成编辑回到预览
+    await page.getByRole('button', { name: /^编\s*辑$/ }).click()
     const editor = page.getByLabel('发布 Markdown 编辑框')
     await expect(editor).toBeVisible()
     await expect(editor).toHaveValue(/title: "冒烟测试文章 v\d+"/)
@@ -134,6 +144,8 @@ test.describe('发布线场景', () => {
     // 配图一在导语块（块 2）之后、「## 要点」之前；配图二在尾段（块 6）之后（文末）
     expect(markdown.indexOf('![](')).toBeLessThan(markdown.indexOf('## 要点'))
     expect(markdown.lastIndexOf('![](')).toBeGreaterThan(markdown.indexOf('如果你能看到这段文字'))
+    await page.getByRole('button', { name: /^完成编辑$/ }).click()
+    await expect(editor).toBeHidden()
 
     // 发布 → 确认弹窗 → 成功态展示 FAKE media_id
     await page.getByRole('button', { name: '发布到公众号草稿箱' }).click()
@@ -180,18 +192,14 @@ test.describe('发布线场景', () => {
     await expect(page.getByText('点击正文任意位置选择插入点，再插入配图。')).toBeVisible()
     await page.getByRole('button', { name: NEXT_STEP }).click() // 主题步
 
-    // 取消默认主题 → 预览步发布按钮禁用
-    await page.locator('.publish-theme-card.is-selected').click()
-    await page.getByRole('button', { name: NEXT_STEP }).click()
-    await expect(page.getByLabel('发布 Markdown 编辑框')).toBeVisible()
+    // 未选主题：预览空态 + 发布按钮禁用
+    await expect(page.getByText('请选择主题查看排版效果')).toBeVisible()
     const publishButton = page.getByRole('button', { name: '发布到公众号草稿箱' })
     await expect(publishButton).toBeDisabled()
 
-    // 回退重新选主题 → 发布失败路径（正文含失败标记）
-    await page.getByRole('button', { name: PREV_STEP }).click()
+    // 选主题（default）→ 预览渲染 → 发布失败路径（正文含失败标记）
     await page.locator('.publish-theme-card').first().click()
-    await page.getByRole('button', { name: NEXT_STEP }).click()
-    await expect(page.getByLabel('发布 Markdown 编辑框')).toBeVisible()
+    await expect(page.locator('iframe[title="主题预览"]')).toBeVisible({ timeout: 30_000 })
     await publishButton.click()
     await page.getByRole('dialog').getByRole('button', { name: '确认发布' }).click()
 

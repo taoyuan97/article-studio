@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
 import { Alert, App, Button, Input, Select, Space, Spin, Steps, Typography } from 'antd'
@@ -11,6 +11,7 @@ import type { ImagePlacement, PublishBlock, PublishTheme } from '../api/types'
 import StatusBanner from '../components/StatusBanner'
 import CoverPickerModal from '../features/publish/CoverPickerModal'
 import ImagePlacementEditor from '../features/publish/ImagePlacementEditor'
+import ThemePreviewPanel from '../features/publish/ThemePreviewPanel'
 import { publishErrorText } from '../features/publish/errorText'
 import { sanitizePlacements } from '../features/publish/placements'
 import { resolveImageUrl } from '../lib/format'
@@ -19,7 +20,6 @@ const STEP_ITEMS = [
   { title: '版本和信息' },
   { title: '配图与位置' },
   { title: '选主题' },
-  { title: '预览与发布' },
 ]
 
 type PublishPhase =
@@ -29,9 +29,9 @@ type PublishPhase =
   | { status: 'failed'; errorCode: string | null; errorMessage: string }
 
 /**
- * 发布向导（专注模式，四步流）：
- * 版本和信息（文章/版本/封面/作者）→ 配图与位置（正文画布锚点插图）→ 选主题 → 预览编辑并发布到公众号草稿箱。
- * 向导状态本地维护，步骤可回退且选择保持；发布成功后引导查看发布记录。
+ * 发布向导（专注模式，三步流）：
+ * 版本和信息（文章/版本/封面/作者）→ 配图与位置（正文画布锚点插图）→ 选主题（主题预览 + 编辑 + 发布）。
+ * 主题预览与发布使用同一渲染引擎（wenyan core），所见即所发；向导状态本地维护，步骤可回退且选择保持。
  */
 export default function PublishPage() {
   const [searchParams] = useSearchParams()
@@ -55,6 +55,7 @@ export default function PublishPage() {
   const [previewPending, setPreviewPending] = useState(false)
   const [previewError, setPreviewError] = useState<string | null>(null)
   const [markdownDirty, setMarkdownDirty] = useState(false)
+  const [editing, setEditing] = useState(false)
   const [publishPhase, setPublishPhase] = useState<PublishPhase>({ status: 'idle' })
 
   // ---------- 数据加载 ----------
@@ -109,16 +110,6 @@ export default function PublishPage() {
     )
   }, [articleAssets, libraryAssets, coverAssetId])
 
-  // 主题默认选中 default（仅首次数据到达时设置，用户手动取消后不再覆盖）
-  const themeInitialized = useRef(false)
-  useEffect(() => {
-    const themes = themesQuery.data?.items ?? []
-    if (!themeInitialized.current && themes.length > 0) {
-      themeInitialized.current = true
-      setThemeId(themes.find((theme) => theme.id === 'default')?.id ?? themes[0].id)
-    }
-  }, [themesQuery.data])
-
   // 切换文章：清空图片选择与画布（本文配图语境变化）
   useEffect(() => {
     setSelectedAssetIds([])
@@ -171,20 +162,20 @@ export default function PublishPage() {
     [resolvedVersionId, placements, coverAssetId, author],
   )
 
-  // 进入预览步：重新组装（覆盖上次编辑），发布状态复位
+  // 进入选主题步或组装输入变化：重新组装源 Markdown（编辑模式与终稿同步失效），发布状态复位
+  const [assemblyNonce, setAssemblyNonce] = useState(0)
   useEffect(() => {
-    if (step !== 3 || !articleId) return
+    if (step !== 2 || !articleId) return
     let cancelled = false
     setPublishPhase({ status: 'idle' })
+    setEditing(false)
+    setMarkdownDirty(false)
     setPreviewPending(true)
     setPreviewError(null)
     publishApi
       .publishPreview(articleId, assemblyInput)
       .then((result) => {
-        if (!cancelled) {
-          setPreviewMarkdown(result.markdown)
-          setMarkdownDirty(false)
-        }
+        if (!cancelled) setPreviewMarkdown(result.markdown)
       })
       .catch((error: ApiError) => {
         if (!cancelled) setPreviewError(error.message)
@@ -195,9 +186,39 @@ export default function PublishPage() {
     return () => {
       cancelled = true
     }
-    // assemblyInput 内容仅在 0-2 步变化，进入第 3 步时组装一次即可
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step, articleId])
+  }, [step, articleId, assemblyInput, assemblyNonce])
+
+  // 主题渲染查询：选中主题即渲染；编辑终稿以 markdown 覆盖（所见即所发）；
+  // 组装输入/主题/终稿任一变化自动重新渲染，React Query 按 key 缓存复用
+  const markdownOverride = !editing && markdownDirty ? previewMarkdown : null
+  const renderQuery = useQuery({
+    queryKey: [
+      'publish-render-preview',
+      articleId,
+      resolvedVersionId,
+      placements,
+      coverAssetId,
+      author,
+      themeId,
+      markdownOverride,
+    ],
+    queryFn: () =>
+      publishApi.renderPreview(articleId!, {
+        version_id: resolvedVersionId,
+        image_placements: placements,
+        cover_asset_id: coverAssetId,
+        author: author.trim() || null,
+        theme_id: themeId!,
+        markdown: markdownOverride,
+      }),
+    enabled: step === 2 && Boolean(articleId && themeId) && !editing && !previewPending,
+    retry: false,
+    placeholderData: (previous) => previous,
+  })
+
+  const renderError = (renderQuery.error as ApiError | null)?.message ?? null
+  const rendering =
+    themeId !== null && (previewPending || (renderQuery.isFetching && !renderQuery.data))
 
   // ---------- 交互 ----------
   const handleInsertAssets = useCallback((anchorBlockIndex: number, assetIds: string[]) => {
@@ -265,6 +286,42 @@ export default function PublishPage() {
           <span className="workspace-eyebrow">PUBLISH</span>
           <h1 className="workspace-title">发布到公众号</h1>
         </div>
+        <Space className="publish-topbar-actions">
+          {step > 0 && (
+            <Button onClick={() => setStep(step - 1)} disabled={publishing}>
+              上一步
+            </Button>
+          )}
+          {step < 2 && (
+            <Button
+              type="primary"
+              disabled={!canLeaveStep}
+              onClick={() => setStep(step + 1)}
+            >
+              下一步
+            </Button>
+          )}
+          {step === 2 && publishPhase.status !== 'succeeded' && (
+            <Button
+              type="primary"
+              loading={publishing}
+              disabled={
+                !themeId ||
+                editing ||
+                previewPending ||
+                Boolean(previewError ?? renderError)
+              }
+              onClick={confirmPublish}
+            >
+              发布到公众号草稿箱
+            </Button>
+          )}
+          {step === 2 && publishPhase.status === 'failed' && (
+            <Button onClick={executePublish} disabled={publishing}>
+              重试发布
+            </Button>
+          )}
+        </Space>
       </div>
 
       <Steps
@@ -379,7 +436,7 @@ export default function PublishPage() {
         )}
 
         {step === 2 && (
-          <section className="publish-step" aria-label="选主题">
+          <section className="publish-step publish-theme-step" aria-label="选主题">
             {themesQuery.isPending ? (
               <div className="workspace-loading">
                 <Spin />
@@ -387,136 +444,92 @@ export default function PublishPage() {
             ) : themesQuery.error ? (
               <StatusBanner kind="error" message={(themesQuery.error as ApiError).message} />
             ) : (
-              <div className="publish-theme-grid" role="radiogroup" aria-label="发布主题">
-                {themes.map((theme: PublishTheme) => {
-                  const selected = themeId === theme.id
-                  return (
-                    <button
-                      type="button"
-                      key={theme.id}
-                      className={`publish-theme-card${selected ? ' is-selected' : ''}`}
-                      aria-pressed={selected}
-                      onClick={() => setThemeId(selected ? null : theme.id)}
-                    >
-                      <span className="publish-theme-name">{theme.name}</span>
-                      <span className="publish-theme-desc">{theme.description}</span>
-                    </button>
-                  )
-                })}
-              </div>
-            )}
-          </section>
-        )}
-
-        {step === 3 && (
-          <section className="publish-step publish-preview" aria-label="预览与发布">
-            {previewPending ? (
-              <div className="workspace-loading">
-                <Spin /> <Typography.Text type="secondary">正在组装发布内容……</Typography.Text>
-              </div>
-            ) : previewError ? (
-              <>
-                <StatusBanner kind="error" message={previewError} />
-                <Button onClick={() => setStep(2)}>返回上一步</Button>
-              </>
-            ) : (
-              <>
-                <Typography.Text type="secondary">
-                  组装结果如下，可直接编辑 Markdown（发布时以编辑后内容为准）。
-                </Typography.Text>
-                <Input.TextArea
-                  className="publish-markdown-editor"
-                  value={previewMarkdown}
-                  onChange={(event) => {
-                    setPreviewMarkdown(event.target.value)
-                    setMarkdownDirty(true)
+              <div className="publish-theme-step-body">
+                <div className="publish-theme-list" role="radiogroup" aria-label="发布主题">
+                  {themes.map((theme: PublishTheme) => {
+                    const selected = themeId === theme.id
+                    return (
+                      <button
+                        type="button"
+                        key={theme.id}
+                        className={`publish-theme-card${selected ? ' is-selected' : ''}`}
+                        aria-pressed={selected}
+                        onClick={() => setThemeId(selected ? null : theme.id)}
+                      >
+                        <span className="publish-theme-name">{theme.name}</span>
+                        <span className="publish-theme-desc">{theme.description}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+                <ThemePreviewPanel
+                  themeSelected={Boolean(themeId)}
+                  html={renderQuery.data?.html}
+                  rendering={rendering}
+                  error={previewError ?? renderError}
+                  onRetry={() => {
+                    if (previewError) setAssemblyNonce((nonce) => nonce + 1)
+                    else void renderQuery.refetch()
                   }}
-                  rows={16}
-                  aria-label="发布 Markdown 编辑框"
+                  editing={editing}
+                  editedMarkdown={previewMarkdown}
+                  onStartEdit={() => setEditing(true)}
+                  onFinishEdit={(markdown) => {
+                    setPreviewMarkdown(markdown)
+                    setMarkdownDirty(true)
+                    setEditing(false)
+                  }}
+                  onCancelEdit={() => setEditing(false)}
                 />
-                {publishPhase.status === 'succeeded' ? (
-                  <Alert
-                    type="success"
-                    showIcon
-                    className="publish-result"
-                    message="已发布到公众号草稿箱"
-                    description={
-                      <div className="publish-success-body">
-                        <p>
-                          media_id：<code>{publishPhase.mediaId}</code>
-                        </p>
-                        <p>本系统仅创建草稿、不群发；请前往公众号后台「草稿箱」查看与群发。</p>
-                        <Space>
-                          <a href="https://mp.weixin.qq.com/" target="_blank" rel="noreferrer">
-                            去公众号后台草稿箱查看
-                          </a>
-                          <Link to="/publish-records">查看发布记录</Link>
-                        </Space>
-                      </div>
-                    }
-                  />
-                ) : publishPhase.status === 'failed' ? (
-                  <Alert
-                    type="error"
-                    showIcon
-                    className="publish-result"
-                    message="发布失败"
-                    description={
-                      <div className="publish-failure-body">
-                        <p>{publishErrorText(publishPhase.errorCode, publishPhase.errorMessage)}</p>
-                        {publishPhase.errorCode === 'PUBLISH_MCP_ERROR' &&
-                        publishPhase.errorMessage ? (
-                          <p className="publish-failure-detail">
-                            详情：{publishPhase.errorMessage}
-                          </p>
-                        ) : null}
-                        {publishPhase.errorCode && (
-                          <p>
-                            错误码：<code>{publishPhase.errorCode}</code>
-                          </p>
-                        )}
-                      </div>
-                    }
-                  />
-                ) : null}
-              </>
+              </div>
             )}
+            {publishPhase.status === 'succeeded' ? (
+              <Alert
+                type="success"
+                showIcon
+                className="publish-result"
+                message="已发布到公众号草稿箱"
+                description={
+                  <div className="publish-success-body">
+                    <p>
+                      media_id：<code>{publishPhase.mediaId}</code>
+                    </p>
+                    <p>本系统仅创建草稿、不群发；请前往公众号后台「草稿箱」查看与群发。</p>
+                    <Space>
+                      <a href="https://mp.weixin.qq.com/" target="_blank" rel="noreferrer">
+                        去公众号后台草稿箱查看
+                      </a>
+                      <Link to="/publish-records">查看发布记录</Link>
+                    </Space>
+                  </div>
+                }
+              />
+            ) : publishPhase.status === 'failed' ? (
+              <Alert
+                type="error"
+                showIcon
+                className="publish-result"
+                message="发布失败"
+                description={
+                  <div className="publish-failure-body">
+                    <p>{publishErrorText(publishPhase.errorCode, publishPhase.errorMessage)}</p>
+                    {publishPhase.errorCode === 'PUBLISH_MCP_ERROR' &&
+                    publishPhase.errorMessage ? (
+                      <p className="publish-failure-detail">
+                        详情：{publishPhase.errorMessage}
+                      </p>
+                    ) : null}
+                    {publishPhase.errorCode && (
+                      <p>
+                        错误码：<code>{publishPhase.errorCode}</code>
+                      </p>
+                    )}
+                  </div>
+                }
+              />
+            ) : null}
           </section>
         )}
-      </div>
-
-      <div className="publish-footer">
-        <Space>
-          {step > 0 && (
-            <Button onClick={() => setStep(step - 1)} disabled={publishing}>
-              上一步
-            </Button>
-          )}
-          {step < 3 && (
-            <Button
-              type="primary"
-              disabled={!canLeaveStep}
-              onClick={() => setStep(step + 1)}
-            >
-              下一步
-            </Button>
-          )}
-          {step === 3 && publishPhase.status !== 'succeeded' && (
-            <Button
-              type="primary"
-              loading={publishing}
-              disabled={!themeId || previewPending || Boolean(previewError)}
-              onClick={confirmPublish}
-            >
-              发布到公众号草稿箱
-            </Button>
-          )}
-          {step === 3 && publishPhase.status === 'failed' && (
-            <Button onClick={executePublish} disabled={publishing}>
-              重试发布
-            </Button>
-          )}
-        </Space>
       </div>
 
       <CoverPickerModal

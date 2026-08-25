@@ -11,6 +11,7 @@ from app.main import create_app
 from app.publish_service import (
     PublishError,
     build_publish_markdown,
+    map_local_paths_to_static,
     resolve_image_path,
     split_blocks,
     split_sections,
@@ -320,6 +321,33 @@ def test_resolve_image_path_unsupported_scheme():
     assert exc_info.value.code == "PUBLISH_ASSET_MISSING"
 
 
+# ------------------------------------------------- map_local_paths_to_static
+
+
+def test_map_local_paths_to_static_maps_local_paths(tmp_path):
+    relative = "images/pic.png"
+    file_path = tmp_path / "assets" / relative
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    file_path.write_bytes(b"png")
+    assets = {"a1": {"storage_url": f"/static/assets/{relative}"}}
+    local = str((tmp_path / "assets" / relative).resolve())
+    markdown = f'---\ncover: "{local}"\n---\n\n正文\n\n![]({local})\n'
+
+    result = map_local_paths_to_static(markdown, assets, tmp_path)
+
+    web = f"/static/assets/{relative}"
+    assert f'cover: "{web}"' in result
+    assert f"![]({web})" in result
+    assert local not in result
+
+
+def test_map_local_paths_to_static_http_and_no_assets_passthrough():
+    assets = {"a1": {"storage_url": "https://example.com/a.png"}}
+    markdown = "![](https://example.com/a.png)\n\n纯文本"
+    assert map_local_paths_to_static(markdown, assets, Path("data")) == markdown
+    assert map_local_paths_to_static(markdown, {}, Path("data")) == markdown
+
+
 # ------------------------------------------------------------ API integration
 
 
@@ -505,6 +533,90 @@ async def test_publish_preview_after_block_out_of_range_rejected(api):
     })
     assert response.status_code == 400, response.text
     assert response.json()["error"]["code"] == "PUBLISH_PLACEMENT_INVALID"
+
+
+# ------------------------------------------------------------ render-preview
+
+
+async def test_render_preview_assembles_and_renders(api, monkeypatch):
+    application, client, tmp_path = api
+    article, _ = await make_article_with_version(api)
+    asset_id = seed_asset(application, tmp_path, "pic")
+    captured: dict = {}
+
+    async def fake_render(markdown, theme_id):
+        captured["markdown"] = markdown
+        captured["theme_id"] = theme_id
+        return '<section id="wenyan">preview</section>'
+
+    monkeypatch.setattr(application.state.wenyan_client, "render_markdown", fake_render)
+
+    response = await client.post("/api/publish/render-preview", json={
+        "article_id": article["id"],
+        "theme_id": "orangeheart",
+        "image_placements": [
+            {"asset_id": asset_id, "position": "after_block_2", "order": 0}
+        ],
+        "cover_asset_id": asset_id,
+        "author": "作者",
+    })
+    assert response.status_code == 200, response.text
+    assert response.json()["html"] == '<section id="wenyan">preview</section>'
+    assert captured["theme_id"] == "orangeheart"
+    # 组装产物中本地绝对路径已映射回 /static（正文图 + frontmatter cover 均为 web 路径）
+    web = "/static/assets/images/pic.png"
+    assert f"![]({web})" in captured["markdown"]
+    assert f'cover: "{web}"' in captured["markdown"]
+    assert str(tmp_path) not in captured["markdown"]
+    assert 'title: "测试文章"' in captured["markdown"]
+
+
+async def test_render_preview_markdown_override_skips_assembly(api, monkeypatch):
+    application, client, _ = api
+    article, _ = await make_article_with_version(api)
+    captured: dict = {}
+
+    async def fake_render(markdown, theme_id):
+        captured["markdown"] = markdown
+        return "<section>ok</section>"
+
+    monkeypatch.setattr(application.state.wenyan_client, "render_markdown", fake_render)
+
+    response = await client.post("/api/publish/render-preview", json={
+        "article_id": article["id"],
+        "theme_id": "default",
+        "markdown": "## 手动编辑\n\n终稿内容",
+    })
+    assert response.status_code == 200, response.text
+    assert captured["markdown"] == "## 手动编辑\n\n终稿内容"
+
+
+async def test_render_preview_theme_id_required(api):
+    _, client, _ = api
+    article, _ = await make_article_with_version(api)
+
+    response = await client.post("/api/publish/render-preview", json={
+        "article_id": article["id"],
+    })
+    assert response.status_code == 422
+
+
+async def test_render_preview_render_error_propagates(api, monkeypatch):
+    application, client, _ = api
+    article, _ = await make_article_with_version(api)
+
+    async def fake_render(markdown, theme_id):
+        raise PublishError("PUBLISH_RENDER_ERROR", "主题预览渲染失败：主题不存在: nope")
+
+    monkeypatch.setattr(application.state.wenyan_client, "render_markdown", fake_render)
+
+    response = await client.post("/api/publish/render-preview", json={
+        "article_id": article["id"],
+        "theme_id": "nope",
+    })
+    assert response.status_code == 400, response.text
+    assert response.json()["error"]["code"] == "PUBLISH_RENDER_ERROR"
+    assert "主题不存在" in response.json()["error"]["message"]
 
 
 async def test_publish_success_with_after_block_position(api):

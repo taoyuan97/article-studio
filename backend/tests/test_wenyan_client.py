@@ -175,3 +175,61 @@ def test_subprocess_env_without_data_dir_has_no_redirect():
     assert env["WECHAT_APP_ID"] == "wx-test-id"
     if "XDG_CONFIG_HOME" not in os.environ:
         assert "XDG_CONFIG_HOME" not in env
+
+
+# ------------------------------------------------------------ render_markdown
+
+
+async def test_render_markdown_empty_theme_rejected():
+    client = make_client(publish_fake_mode=True)
+    with pytest.raises(PublishError) as exc_info:
+        await client.render_markdown("# t\n正文", " ")
+    assert exc_info.value.code == "PUBLISH_THEME_MISSING"
+
+
+async def test_render_markdown_empty_markdown_rejected():
+    client = make_client(publish_fake_mode=True)
+    with pytest.raises(PublishError) as exc_info:
+        await client.render_markdown("   \n", "default")
+    assert exc_info.value.code == "PUBLISH_RENDER_ERROR"
+
+
+async def test_render_markdown_mcp_not_installed(tmp_path):
+    # Command resolves to nothing on PATH → core cannot be located
+    settings = make_settings(publish_fake_mode=True, data_dir=tmp_path)
+    settings.wenyan_mcp_command = "wenyan-mcp-not-installed-xyz"
+    client = WenyanMcpClient(settings)
+    with pytest.raises(PublishError) as exc_info:
+        await client.render_markdown("# t\n正文", "default")
+    assert exc_info.value.code == "PUBLISH_MCP_NOT_INSTALLED"
+    assert "npm install -g @wenyan-md/mcp" in exc_info.value.message
+
+
+def _core_wrapper_available(client: WenyanMcpClient) -> bool:
+    try:
+        client._resolve_core_wrapper_path()
+        return True
+    except PublishError:
+        return False
+
+
+async def test_render_markdown_real_node_integration():
+    """Real render via local node + @wenyan-md/core (skipped when not installed).
+
+    Verifies preview HTML matches the publish rendering output shape:
+    a <section id="wenyan"> with inline theme styles, and that unknown
+    themes fail with the original core error message.
+    """
+    client = make_client(publish_fake_mode=True)
+    if not _core_wrapper_available(client):
+        pytest.skip("wenyan-mcp / @wenyan-md/core not installed locally")
+
+    html = await client.render_markdown("---\ntitle: t\n---\n\n## 标题\n\n正文", "default")
+    assert html.startswith('<section id="wenyan"')
+    assert "标题" in html
+    assert "正文" in html
+
+    with pytest.raises(PublishError) as exc_info:
+        await client.render_markdown("# t", "no-such-theme-xyz")
+    assert exc_info.value.code == "PUBLISH_RENDER_ERROR"
+    assert "no-such-theme-xyz" in exc_info.value.message

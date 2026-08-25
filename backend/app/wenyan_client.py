@@ -167,6 +167,92 @@ class WenyanMcpClient:
         except Exception as exc:  # subprocess spawn failures, protocol errors
             raise PublishError("PUBLISH_MCP_ERROR", f"wenyan-mcp 调用失败：{exc}") from exc
 
+    def _resolve_core_wrapper_path(self) -> str:
+        """Resolve @wenyan-md/core wrapper.js from the wenyan-mcp install root.
+
+        Layouts probed relative to the resolved command (globally installed):
+        - Windows npm: <npm_root>/wenyan-mcp.cmd with node_modules beside it
+        - Unix npm: <prefix>/bin/wenyan-mcp with <prefix>/lib/node_modules
+        Within node_modules, core is a nested dependency of mcp (npm default)
+        or hoisted to the top level (some package managers).
+        """
+        command, _ = self._server_command()
+        cmd_dir = Path(command).resolve().parent
+        search_roots = [cmd_dir, cmd_dir.parent / "lib"]
+        candidates = []
+        for root in search_roots:
+            candidates.extend(
+                [
+                    root
+                    / "node_modules"
+                    / "@wenyan-md"
+                    / "mcp"
+                    / "node_modules"
+                    / "@wenyan-md"
+                    / "core"
+                    / "dist"
+                    / "wrapper.js",
+                    root / "node_modules" / "@wenyan-md" / "core" / "dist" / "wrapper.js",
+                ]
+            )
+        for candidate in candidates:
+            if candidate.is_file():
+                return str(candidate)
+        raise PublishError(
+            "PUBLISH_MCP_NOT_INSTALLED",
+            "未找到 @wenyan-md/core 渲染库（主题预览依赖 wenyan-mcp 安装），"
+            "请先 npm install -g @wenyan-md/mcp。",
+        )
+
+    async def render_markdown(self, markdown: str, theme_id: str) -> str:
+        """Render markdown to theme-styled HTML via the local wenyan core.
+
+        Uses the exact same rendering path as publish_article
+        (renderStyledContent with identical options), so the preview always
+        matches the published result. No WeChat credentials required.
+        """
+        if not theme_id or not theme_id.strip():
+            raise PublishError("PUBLISH_THEME_MISSING", "发布主题（theme_id）不能为空。")
+        if not markdown.strip():
+            raise PublishError("PUBLISH_RENDER_ERROR", "待渲染的 Markdown 不能为空。")
+        core_path = self._resolve_core_wrapper_path()
+        script_path = Path(__file__).resolve().parent.parent / "scripts" / "wenyan_render.mjs"
+        payload = json.dumps(
+            {"markdown": markdown, "themeId": theme_id.strip()},
+            ensure_ascii=False,
+        )
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "node",
+                str(script_path),
+                core_path,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        except FileNotFoundError as exc:
+            raise PublishError(
+                "PUBLISH_RENDER_ERROR", "未找到 node 可执行文件，无法渲染主题预览。"
+            ) from exc
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(payload.encode("utf-8")), timeout=30.0
+            )
+        except TimeoutError:
+            process.kill()
+            raise PublishError(
+                "PUBLISH_RENDER_TIMEOUT", "主题预览渲染超时（30s），请稍后重试。"
+            ) from None
+        if process.returncode != 0:
+            detail = stderr.decode("utf-8", errors="replace").strip() or "未知错误"
+            raise PublishError("PUBLISH_RENDER_ERROR", f"主题预览渲染失败：{detail}")
+        try:
+            return json.loads(stdout.decode("utf-8"))["html"]
+        except (json.JSONDecodeError, KeyError) as exc:
+            raise PublishError(
+                "PUBLISH_RENDER_ERROR", "主题预览渲染返回异常，无法解析 HTML。"
+            ) from exc
+
     async def list_themes(self) -> list[dict[str, str]]:
         """Return theme list; built-in themes first, custom themes after."""
         if self.fake_mode:

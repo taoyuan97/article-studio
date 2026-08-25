@@ -30,6 +30,7 @@ from .image_service import ImageRunManager
 from .publish_service import (
     build_publish_markdown,
     execute_publish,
+    map_local_paths_to_static,
     split_blocks,
     split_sections,
 )
@@ -101,6 +102,11 @@ class PublishCreateRequest(BaseModel):
     author: str | None = None
     digest: str | None = None
     edited_markdown: str | None = None
+
+
+class PublishRenderPreviewRequest(PublishPreviewRequest):
+    theme_id: str = Field(min_length=1)
+    markdown: str | None = None
 
 
 def _error(code: str, message: str, http_status: int) -> HTTPException:
@@ -620,6 +626,35 @@ def create_app(
             "blocks": split_blocks(version["content_markdown"]),
             "markdown": markdown,
         }
+
+    @application.post("/api/publish/render-preview")
+    async def publish_render_preview(
+        payload: PublishRenderPreviewRequest, request: Request
+    ):
+        """Theme preview: assemble (unless markdown override) then render via
+        the local wenyan core — the same code path as publish_article."""
+        assets = collect_assets(
+            request, payload.image_placements, payload.cover_asset_id
+        )
+        if payload.markdown is not None:
+            markdown = payload.markdown
+        else:
+            article = repository(request).get_article(payload.article_id)
+            version = resolve_version(request, payload.article_id, payload.version_id)
+            markdown = build_publish_markdown(
+                title=version["title"] or article["title"],
+                content_markdown=version["content_markdown"],
+                image_placements=[item.model_dump() for item in payload.image_placements],
+                assets=assets,
+                cover_asset_id=payload.cover_asset_id,
+                author=payload.author,
+                data_dir=request.app.state.data_dir,
+            )
+        markdown = map_local_paths_to_static(
+            markdown, assets, request.app.state.data_dir
+        )
+        html = await wenyan_client(request).render_markdown(markdown, payload.theme_id)
+        return {"html": html}
 
     @application.post("/api/publish/articles/{article_id}")
     async def publish_article(article_id: str, payload: PublishCreateRequest, request: Request):

@@ -9,12 +9,14 @@ import { ApiError } from '../api/client'
 const publishPreview = vi.fn()
 const publishArticle = vi.fn()
 const fetchPublishThemes = vi.fn()
+const renderPreview = vi.fn()
 
 vi.mock('../api/publish', () => ({
   publishApi: {
     fetchPublishThemes: (...args: unknown[]) => fetchPublishThemes(...args),
     publishPreview: (...args: unknown[]) => publishPreview(...args),
     publishArticle: (...args: unknown[]) => publishArticle(...args),
+    renderPreview: (...args: unknown[]) => renderPreview(...args),
     fetchPublishRecords: vi.fn(),
     fetchPublishRecordDetail: vi.fn(),
   },
@@ -142,8 +144,8 @@ async function insertViaModal(
   )
 }
 
-/** 从步骤 1 走到预览步（可选封面/作者，步骤 2 锚定块 2 弹窗插两张图，主题保持默认 default） */
-async function goToPreview(
+/** 走到选主题步（可选封面/作者，步骤 1 锚定块 2 弹窗插两张图） */
+async function goToThemes(
   user: ReturnType<typeof userEvent.setup>,
   opts: { pickCover?: RegExp | null; author?: string } = {},
 ) {
@@ -156,14 +158,16 @@ async function goToPreview(
   await insertViaModal(user, 2, [/素材 asset-1/, /素材 asset-2/])
   await user.click(screen.getByRole('button', { name: '下一步' }))
   await screen.findByText('Default')
-  await user.click(screen.getByRole('button', { name: '下一步' }))
-  await screen.findByLabelText('发布 Markdown 编辑框')
-  await waitFor(() =>
-    expect(screen.getByLabelText('发布 Markdown 编辑框')).toHaveValue(ASSEMBLED),
-  )
 }
 
-describe('PublishPage 四步向导', () => {
+/** 选主题步选中 Default 主题并等待预览 iframe 渲染完成 */
+async function pickDefaultTheme(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(await screen.findByRole('button', { name: /Default/ }))
+  await screen.findByTitle('主题预览')
+  await waitFor(() => expect(renderPreview).toHaveBeenCalled())
+}
+
+describe('PublishPage 三步向导', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     listArticles.mockResolvedValue({
@@ -197,6 +201,7 @@ describe('PublishPage 四步向导', () => {
       ],
     })
     publishPreview.mockResolvedValue({ sections: SECTIONS, blocks: BLOCKS, markdown: ASSEMBLED })
+    renderPreview.mockResolvedValue({ html: '<section id="wenyan">rendered</section>' })
     publishArticle.mockResolvedValue({
       publish_id: 'rec-1',
       media_id: 'FAKE_MEDIA_abcd1234',
@@ -317,16 +322,16 @@ describe('PublishPage 四步向导', () => {
     await waitFor(() => expect(withinCanvas().queryByAltText('素材 asset-1')).toBeNull())
     expect(withinCanvas().getByAltText('素材 asset-2')).toBeInTheDocument()
 
-    // 进入预览：payload 仅剩 asset-2
+    // 进入选主题步：组装 payload 仅剩 asset-2
     await user.click(screen.getByRole('button', { name: '下一步' }))
     await screen.findByText('Default')
-    await user.click(screen.getByRole('button', { name: '下一步' }))
-    await screen.findByLabelText('发布 Markdown 编辑框')
-    expect(publishPreview).toHaveBeenLastCalledWith(
-      'a1',
-      expect.objectContaining({
-        image_placements: [{ asset_id: 'asset-2', position: 'after_block_2', order: 1 }],
-      }),
+    await waitFor(() =>
+      expect(publishPreview).toHaveBeenLastCalledWith(
+        'a1',
+        expect.objectContaining({
+          image_placements: [{ asset_id: 'asset-2', position: 'after_block_2', order: 1 }],
+        }),
+      ),
     )
   })
 
@@ -404,31 +409,68 @@ describe('PublishPage 四步向导', () => {
     expect(screen.queryByText(/本文配图/)).not.toBeInTheDocument()
   })
 
-  it('主题默认选中 default，点击已选主题可取消；未选主题时发布按钮不可用', async () => {
+  it('选主题步：未选主题显示空态且发布禁用；点选主题后渲染预览并启用，再点取消恢复空态', async () => {
     const user = userEvent.setup()
     renderPublish()
-    await waitForData()
-    await user.click(screen.getByRole('button', { name: '下一步' }))
-    await screen.findByLabelText('正文画布')
-    await user.click(screen.getByRole('button', { name: '下一步' }))
+    await goToThemes(user)
 
-    const defaultCard = await screen.findByRole('button', { name: /Default/ })
-    expect(defaultCard).toHaveClass('is-selected')
-    // 取消选择
-    await user.click(defaultCard)
-    expect(screen.getByRole('button', { name: /Default/ })).not.toHaveClass('is-selected')
+    // 未选主题：空态引导 + 发布禁用，未发起渲染
+    expect(await screen.findByText('请选择主题查看排版效果')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '发布到公众号草稿箱' })).toBeDisabled()
+    expect(renderPreview).not.toHaveBeenCalled()
 
-    await user.click(screen.getByRole('button', { name: '下一步' }))
-    await screen.findByLabelText('发布 Markdown 编辑框')
+    // 点选 Default：渲染预览（iframe）+ 发布启用
+    await user.click(screen.getByRole('button', { name: /Default/ }))
+    await waitFor(() => expect(renderPreview).toHaveBeenCalled())
+    expect(renderPreview).toHaveBeenCalledWith(
+      'a1',
+      expect.objectContaining({ theme_id: 'default' }),
+    )
+    const iframe = screen.getByTitle('主题预览')
+    expect(iframe).toHaveAttribute('srcdoc', expect.stringContaining('<section id="wenyan">'))
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: '发布到公众号草稿箱' })).toBeDisabled(),
+      expect(screen.getByRole('button', { name: '发布到公众号草稿箱' })).toBeEnabled(),
+    )
+
+    // 切换主题：以新 theme_id 重新渲染
+    await user.click(screen.getByRole('button', { name: /Rainbow/ }))
+    await waitFor(() =>
+      expect(renderPreview).toHaveBeenLastCalledWith(
+        'a1',
+        expect.objectContaining({ theme_id: 'rainbow' }),
+      ),
+    )
+
+    // 取消选择：恢复空态 + 发布禁用
+    await user.click(screen.getByRole('button', { name: /Rainbow/ }))
+    expect(await screen.findByText('请选择主题查看排版效果')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '发布到公众号草稿箱' })).toBeDisabled()
+  })
+
+  it('主题渲染失败：显示错误与重试，重试后恢复预览', async () => {
+    renderPreview
+      .mockRejectedValueOnce(new ApiError('主题预览渲染失败：主题不存在: nope', 400, 'PUBLISH_RENDER_ERROR'))
+      .mockResolvedValueOnce({ html: '<section id="wenyan">rendered</section>' })
+    const user = userEvent.setup()
+    renderPublish()
+    await goToThemes(user)
+
+    await user.click(screen.getByRole('button', { name: /Default/ }))
+    expect(await screen.findByText(/主题预览渲染失败/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '发布到公众号草稿箱' })).toBeDisabled()
+
+    await user.click(screen.getByRole('button', { name: /重\s*试/ }))
+    await screen.findByTitle('主题预览')
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: '发布到公众号草稿箱' })).toBeEnabled(),
     )
   })
 
   it('发布成功：确认弹窗 → loading → 成功态展示 media_id 与查看发布记录链接；插图与封面/作者随 payload 透传', async () => {
     const user = userEvent.setup()
     renderPublish()
-    await goToPreview(user, { author: '测试作者' })
+    await goToThemes(user, { author: '测试作者' })
+    await pickDefaultTheme(user)
 
     expect(publishPreview).toHaveBeenLastCalledWith('a1', {
       version_id: 'v1',
@@ -464,7 +506,8 @@ describe('PublishPage 四步向导', () => {
   it('未选封面时发布：cover_asset_id 为 null（插图不自动设封面）', async () => {
     const user = userEvent.setup()
     renderPublish()
-    await goToPreview(user, { pickCover: null })
+    await goToThemes(user, { pickCover: null })
+    await pickDefaultTheme(user)
 
     expect(publishPreview).toHaveBeenLastCalledWith(
       'a1',
@@ -591,14 +634,40 @@ describe('PublishPage 四步向导', () => {
     expect(screen.getByText('未插图时发布纯文字版本，需在「版本和信息」步骤选择封面。')).toBeInTheDocument()
   })
 
-  it('编辑 Markdown 后发布：edited_markdown 透传编辑内容', async () => {
+  it('编辑模式：默认只读预览，【编辑】切换 TextArea，完成编辑后以编辑终稿重新渲染并随发布透传', async () => {
     const user = userEvent.setup()
     renderPublish()
-    await goToPreview(user)
+    await goToThemes(user)
+    await pickDefaultTheme(user)
 
+    // 默认只读：无编辑框，iframe 预览在
+    expect(screen.queryByLabelText('发布 Markdown 编辑框')).not.toBeInTheDocument()
+    expect(screen.getByTitle('主题预览')).toBeInTheDocument()
+
+    // 进入编辑模式：TextArea 初始化为组装结果（AntD 汉字按钮自动插空格，用正则匹配）
+    await user.click(screen.getByRole('button', { name: /编\s*辑/ }))
     const editor = screen.getByLabelText('发布 Markdown 编辑框')
+    expect(editor).toHaveValue(ASSEMBLED)
+    expect(screen.getByRole('button', { name: '发布到公众号草稿箱' })).toBeDisabled()
+
     await user.clear(editor)
     await user.type(editor, '---\ntitle: "手工编辑版"\n---\n\n编辑后的正文')
+    await user.click(screen.getByRole('button', { name: /完成编辑/ }))
+
+    // 完成编辑：回到只读预览，并以编辑终稿重新渲染（markdown 覆盖）
+    await waitFor(() =>
+      expect(renderPreview).toHaveBeenLastCalledWith(
+        'a1',
+        expect.objectContaining({
+          theme_id: 'default',
+          markdown: '---\ntitle: "手工编辑版"\n---\n\n编辑后的正文',
+        }),
+      ),
+    )
+    expect(screen.queryByLabelText('发布 Markdown 编辑框')).not.toBeInTheDocument()
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: '发布到公众号草稿箱' })).toBeEnabled(),
+    )
 
     await user.click(screen.getByRole('button', { name: '发布到公众号草稿箱' }))
     await user.click(await screen.findByRole('button', { name: '确认发布' }))
@@ -607,6 +676,33 @@ describe('PublishPage 四步向导', () => {
     expect(publishArticle).toHaveBeenCalledWith(
       'a1',
       expect.objectContaining({ edited_markdown: '---\ntitle: "手工编辑版"\n---\n\n编辑后的正文' }),
+    )
+  })
+
+  it('取消编辑：不提交草稿内容，预览与发布仍用组装结果', async () => {
+    const user = userEvent.setup()
+    renderPublish()
+    await goToThemes(user)
+    await pickDefaultTheme(user)
+
+    await user.click(screen.getByRole('button', { name: /编\s*辑/ }))
+    const editor = screen.getByLabelText('发布 Markdown 编辑框')
+    await user.clear(editor)
+    await user.type(editor, '临时草稿不该生效')
+    await user.click(screen.getByRole('button', { name: /取消编辑/ }))
+
+    expect(screen.queryByLabelText('发布 Markdown 编辑框')).not.toBeInTheDocument()
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: '发布到公众号草稿箱' })).toBeEnabled(),
+    )
+
+    await user.click(screen.getByRole('button', { name: '发布到公众号草稿箱' }))
+    await user.click(await screen.findByRole('button', { name: '确认发布' }))
+    await screen.findByText('已发布到公众号草稿箱')
+
+    expect(publishArticle).toHaveBeenCalledWith(
+      'a1',
+      expect.objectContaining({ edited_markdown: null }),
     )
   })
 
@@ -622,7 +718,8 @@ describe('PublishPage 四步向导', () => {
       })
     const user = userEvent.setup()
     renderPublish()
-    await goToPreview(user)
+    await goToThemes(user)
+    await pickDefaultTheme(user)
 
     await user.click(screen.getByRole('button', { name: '发布到公众号草稿箱' }))
     await user.click(await screen.findByRole('button', { name: '确认发布' }))
@@ -636,11 +733,11 @@ describe('PublishPage 四步向导', () => {
     expect(screen.getByText('FAKE_MEDIA_retry_ok')).toBeInTheDocument()
   })
 
-  it('回退保持状态：预览步回退到配图步，已插图仍在画布', async () => {
+  it('回退保持状态：选主题步回退到配图步，已插图仍在画布', async () => {
     const user = userEvent.setup()
     renderPublish()
-    await goToPreview(user)
-    await user.click(screen.getByRole('button', { name: '上一步' }))
+    await goToThemes(user)
+    await pickDefaultTheme(user)
     await user.click(screen.getByRole('button', { name: '上一步' }))
     await screen.findByLabelText('正文画布')
     expect(withinCanvas().getByAltText('素材 asset-1')).toBeInTheDocument()

@@ -302,6 +302,11 @@ export interface PublishPreviewResponse {
   markdown: string
 }
 
+/** POST /api/publish/render-preview 响应（主题渲染 HTML） */
+export interface PublishRenderPreviewResponse {
+  html: string
+}
+
 /** POST /api/publish/articles/{id} 响应 */
 export interface PublishArticleResponse {
   publish_id: string

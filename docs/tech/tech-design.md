@@ -253,12 +253,14 @@ WENYAN_MCP_COMMAND=wenyan-mcp   # 发布子进程命令（stdio MCP，按需拉�
 PUBLISH_FAKE_MODE=false   # true 时不启动子进程、不外呼（开发/测试默认 true）
 ```
 
-### 5.6 发布线设计（T007–T013）
+### 5.6 发布线设计（T007–T014）
 
 - **`app/wenyan_client.py`**：`WenyanMcpClient` 封装 wenyan-mcp（stdio 子进程，按需拉起用完即退）；`list_themes` / `publish_article` 两个工具调用，120s 超时；子进程环境注入凭据并将 wenyan-mcp 配置目录经 `XDG_CONFIG_HOME` 重定向到 `DATA_DIR/wenyan-md/`（规避沙箱/受限令牌下 `%APPDATA%` 不可写的 EPERM）；fake 模式返回内置主题与 `FAKE_MEDIA_xxx`，凭据校验仍生效（行为与真实一致）。假模式失败注入：正文含「触发发布失败」标记 → `PUBLISH_MCP_ERROR`（40164）。
-- **`app/publish_service.py`**：组装（`_walk_blocks` 顶层块切分（fence/标题感知，与 `split_sections` 的 H2 计数对齐）→ 按 placements 插图 → wenyan frontmatter：title/cover/author）→ 临时文件 → 发布 → 落 `publish_records`（成功/失败均落，快照可回看）→ 临时文件即删。图片 `storage_url` 解析为本地绝对路径（wenyan-mcp 要求），缺失抛 `PUBLISH_ASSET_MISSING`。
+- **主题预览渲染（T014）**：`render_markdown(markdown, theme_id)` 经 `scripts/wenyan_render.mjs`（node 子进程，stdin JSON / stdout JSON）调用 `@wenyan-md/core` 的 `renderStyledContent`，参数与 wenyan-mcp 发布链路完全一致（`hlThemeId: solarized-light` / `isMacStyle: true` / `isAddFootnote: true`），**预览 = 发布渲染效果**；core 为 wenyan-mcp 嵌套依赖，路径由 `WENYAN_MCP_COMMAND` 解析出的可执行位置推导（npm 全局嵌套/提升两种布局探测），找不到抛 `PUBLISH_MCP_NOT_INSTALLED`（fake 模式同样真实渲染，不伪造 HTML）；30s 超时 → `PUBLISH_RENDER_TIMEOUT`，脚本非零退出 → `PUBLISH_RENDER_ERROR`（透传 stderr，含「主题不存在」等原文）。渲染子进程含 JSDOM + mermaid，冷启动 1~3s（前端加载态覆盖）。
+- **`app/publish_service.py`**：组装（`_walk_blocks` 顶层块切分（fence/标题感知，与 `split_sections` 的 H2 计数对齐）→ 按 placements 插图 → wenyan frontmatter：title/cover/author）→ 临时文件 → 发布 → 落 `publish_records`（成功/失败均落，快照可回看）→ 临时文件即删。图片 `storage_url` 解析为本地绝对路径（wenyan-mcp 要求），缺失抛 `PUBLISH_ASSET_MISSING`。`map_local_paths_to_static`（T014）为其逆映射：渲染预览前将组装产物中的本地绝对图片路径（frontmatter cover 与正文 `![]()`）替换回 `/static/...`，保证同源 iframe 中图片可见；编辑终稿（`markdown` 覆盖）同样过该映射。
 - **插图位置契约（T013）**：`image_placements[].position` 支持 `top` / `bottom` / `after_section_{n}`（历史兼容）/ `after_block_{i}`（块级，全局 1 起编号）。`split_blocks` 供 `POST /api/publish/preview` 返回 `blocks`（`{index, kind, preview, text}`），是前端画布渲染与组装锚点的**单一事实源**（与 `build_publish_markdown` 共用 `_walk_blocks`，编号不漂移）；`after_block_{i}` 越界返回 `PUBLISH_PLACEMENT_INVALID`。
-- **前端**：`PublishPage` 四步向导（版本和信息（文章/版本下拉、`CoverPickerModal` 封面弹窗单选（封面独立于正文配图，切文章重置/切版本保留）、作者）→ 配图与位置（`ArticleCanvas` 正文画布块级渲染 + 点击块设锚点（插入指示线），`ImagePickerModal` 插图弹窗多选（本文配图置顶 + 素材库图片，已插入置灰），确定后按勾选顺序内联插入锚点后；已插图内联展示 hover 删除；切版本失效锚点 sanitize 退到文末并提示）→ 选主题（默认 default）→ 预览编辑与发布（同步等待 120s、成功 media_id / 失败错误码映射文案可重试））；`PublishRecordsPage` 列表（状态筛选、失败展开错误、按文章过滤）；快照详情页只读渲染（frontmatter 剥离 + 本地路径图片映射回 /static + MarkdownView 白名单）。
+- **`POST /api/publish/render-preview`（T014）**：请求 = `PublishPreviewRequest` 全字段 + `theme_id`（必填）+ `markdown`（可选，编辑终稿覆盖——提供时跳过组装直接渲染，仍做路径映射）→ 组装（或覆盖）→ `map_local_paths_to_static` → `render_markdown` → `{html}`；前端 React Query 按 `articleId/versionId/placements/cover/author/themeId/编辑内容` 作 key 缓存复用，切主题即时重渲染。
+- **前端**：`PublishPage` 三步向导（版本和信息（文章/版本下拉、`CoverPickerModal` 封面弹窗单选（封面独立于正文配图，切文章重置/切版本保留）、作者）→ 配图与位置（`ArticleCanvas` 正文画布块级渲染 + 点击块设锚点（插入指示线），`ImagePickerModal` 插图弹窗多选（本文配图置顶 + 素材库图片，已插入置灰），确定后按勾选顺序内联插入锚点后；已插图内联展示 hover 删除；切版本失效锚点 sanitize 退到文末并提示）→ 选主题（左侧主题卡列表 + 右侧 `ThemePreviewPanel` 手机框预览（iframe sandbox + srcDoc），选中即渲染、未选空态引导；预览默认只读，【编辑】原位切换 TextArea、完成编辑后以终稿重渲染；组装输入变化清除编辑态；发布（同步等待 120s、成功 media_id / 失败错误码映射文案可重试）同屏呈现））；`PublishRecordsPage` 列表（状态筛选、失败展开错误、按文章过滤）；快照详情页只读渲染（frontmatter 剥离 + 本地路径图片映射回 /static + MarkdownView 白名单）。
 
 CORS：开发模式继续允许 `http://localhost:5173` / `http://127.0.0.1:5173`（Vite dev server 默认端口，兜底直连场景）；开发主路径走 Vite proxy（同源，不触发 CORS）。
 
@@ -280,7 +282,7 @@ CORS：开发模式继续允许 `http://localhost:5173` / `http://127.0.0.1:5173
 | `/publish-records` | AppLayout（侧边栏第 4 项） | PublishRecordsPage |
 | `/articles/:articleId` | 专注模式（顶部返回） | ArticleWorkspacePage |
 | `/image-sessions/:sessionId` | 专注模式（顶部返回） | ImageWorkspacePage |
-| `/publish` | 专注模式（返回文章列表） | PublishPage（四步发布向导，`?article_id=` 预选） |
+| `/publish` | 专注模式（返回文章列表） | PublishPage（三步发布向导，`?article_id=` 预选） |
 | `/publish-records/:recordId` | 专注模式（返回发布记录） | PublishRecordDetailPage（快照详情） |
 
 生产模式下 BrowserRouter 需后端 SPA fallback 配合（见 5.1）。
