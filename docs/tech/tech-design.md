@@ -48,21 +48,21 @@
 
 ## 3. 已确认技术决策
 
-| 决策项 | 结论 |
-|---|---|
-| 前端框架 | React 19 + Vite + TypeScript（严格模式） |
-| UI 组件库 | Ant Design 5 |
-| 服务端状态 | TanStack Query（缓存/重取/失效） |
-| 客户端状态 | Zustand（仅运行态、UI 态等轻状态） |
-| 路由 | React Router（BrowserRouter） |
-| 包管理器 | pnpm |
-| Markdown 渲染 | react-markdown + rehype 白名单（禁用 raw HTML） |
-| SSE | 原生 `EventSource` 封装 hook（沿用 MVP 事件协议） |
-| 仓库结构 | 单仓双目录：`frontend/` + `backend/` |
-| 生产部署 | FastAPI 托管 `frontend/dist`，单进程（uvicorn） |
-| 后端栈 | Python 3.11+ / FastAPI / LangGraph / LangChain / SQLite（不变） |
-| 数据库 | SQLite 双库（业务 + checkpoint），不迁移 MVP 数据 |
-| 后端改动范围 | 仅包结构统一 + 生产静态托管 + SPA fallback，不改业务逻辑 |
+| 决策项        | 结论                                                            |
+| ------------- | --------------------------------------------------------------- |
+| 前端框架      | React 19 + Vite + TypeScript（严格模式）                        |
+| UI 组件库     | Ant Design 5                                                    |
+| 服务端状态    | TanStack Query（缓存/重取/失效）                                |
+| 客户端状态    | Zustand（仅运行态、UI 态等轻状态）                              |
+| 路由          | React Router（BrowserRouter）                                   |
+| 包管理器      | pnpm                                                            |
+| Markdown 渲染 | react-markdown + rehype 白名单（禁用 raw HTML）                 |
+| SSE           | 原生 `EventSource` 封装 hook（沿用 MVP 事件协议）               |
+| 仓库结构      | 单仓双目录：`frontend/` + `backend/`                            |
+| 生产部署      | FastAPI 托管 `frontend/dist`，单进程（uvicorn）                 |
+| 后端栈        | Python 3.11+ / FastAPI / LangGraph / LangChain / SQLite（不变） |
+| 数据库        | SQLite 双库（业务 + checkpoint），不迁移 MVP 数据               |
+| 后端改动范围  | 仅包结构统一 + 生产静态托管 + SPA fallback，不改业务逻辑        |
 
 ## 4. 仓库与目录结构
 
@@ -207,7 +207,7 @@ run 响应结构（两条线同构）：
 ```json
 {
   "run_id": "...",
-  "article_id": "...",            // 或 "session_id"
+  "article_id": "...", // 或 "session_id"
   "user_message_id": "...",
   "status": "running",
   "events_url": "/api/runs/{run_id}/events"
@@ -218,26 +218,26 @@ run 响应结构（两条线同构）：
 
 文章线事件（`GET /api/runs/{run_id}/events`）：
 
-| 事件 | 语义 | 前端处理 |
-|---|---|---|
-| `run.started` | 运行开始 | 进入运行态，禁用发送/切换 |
-| `assistant.delta` | 助手回复增量 | 更新临时对话气泡 |
-| `article.delta` | 正文增量 | 更新正文临时预览 |
-| `message.completed` | 消息定稿 | 临时消息转正式 |
+| 事件                | 语义             | 前端处理                   |
+| ------------------- | ---------------- | -------------------------- |
+| `run.started`       | 运行开始         | 进入运行态，禁用发送/切换  |
+| `assistant.delta`   | 助手回复增量     | 更新临时对话气泡           |
+| `article.delta`     | 正文增量         | 更新正文临时预览           |
+| `message.completed` | 消息定稿         | 临时消息转正式             |
 | `article.completed` | 版本事务提交成功 | 替换当前正文，刷新版本列表 |
-| `run.cancelled` | 取消 | 丢弃全部临时内容 |
-| `run.failed` | 失败 | 丢弃临时正文，展示失败卡片 |
-| `run.completed` | 运行结束 | 退出运行态，关闭连接 |
+| `run.cancelled`     | 取消             | 丢弃全部临时内容           |
+| `run.failed`        | 失败             | 丢弃临时正文，展示失败卡片 |
+| `run.completed`     | 运行结束         | 退出运行态，关闭连接       |
 
 配图线事件（`GET /api/image-runs/{run_id}/events`）：
 
-| 事件 | 语义 |
-|---|---|
-| `run.started` | 运行开始 |
-| `image.progress` | 生成进度 |
-| `image.completed` | 图片生成完成 |
-| `image.failed` | 生成失败 |
-| `run.cancelled` / `run.completed` | 取消 / 结束 |
+| 事件                              | 语义         |
+| --------------------------------- | ------------ |
+| `run.started`                     | 运行开始     |
+| `image.progress`                  | 生成进度     |
+| `image.completed`                 | 图片生成完成 |
+| `image.failed`                    | 生成失败     |
+| `run.cancelled` / `run.completed` | 取消 / 结束  |
 
 ### 5.4 数据存储
 
@@ -290,16 +290,16 @@ CORS：开发模式继续允许 `http://localhost:5173` / `http://127.0.0.1:5173
 
 ### 6.2 路由设计（React Router，BrowserRouter）
 
-| 路由 | 布局 | 页面 |
-|---|---|---|
-| `/` | AppLayout（侧边导航） | DashboardPage |
-| `/articles` | AppLayout | ArticleListPage |
-| `/assets` | AppLayout | AssetLibraryPage |
-| `/publish-records` | AppLayout（侧边栏第 4 项） | PublishRecordsPage |
-| `/articles/:articleId` | 专注模式（顶部返回） | ArticleWorkspacePage |
-| `/image-sessions/:sessionId` | 专注模式（顶部返回） | ImageWorkspacePage |
-| `/publish` | 专注模式（返回文章列表） | PublishPage（三步发布向导，`?article_id=` 预选） |
-| `/publish-records/:recordId` | 专注模式（返回发布记录） | PublishRecordDetailPage（快照详情） |
+| 路由                         | 布局                       | 页面                                             |
+| ---------------------------- | -------------------------- | ------------------------------------------------ |
+| `/`                          | AppLayout（侧边导航）      | DashboardPage                                    |
+| `/articles`                  | AppLayout                  | ArticleListPage                                  |
+| `/assets`                    | AppLayout                  | AssetLibraryPage                                 |
+| `/publish-records`           | AppLayout（侧边栏第 4 项） | PublishRecordsPage                               |
+| `/articles/:articleId`       | 专注模式（顶部返回）       | ArticleWorkspacePage                             |
+| `/image-sessions/:sessionId` | 专注模式（顶部返回）       | ImageWorkspacePage                               |
+| `/publish`                   | 专注模式（返回文章列表）   | PublishPage（三步发布向导，`?article_id=` 预选） |
+| `/publish-records/:recordId` | 专注模式（返回发布记录）   | PublishRecordDetailPage（快照详情）              |
 
 生产模式下 BrowserRouter 需后端 SPA fallback 配合（见 5.1）。
 
@@ -321,6 +321,13 @@ CORS：开发模式继续允许 `http://localhost:5173` / `http://127.0.0.1:5173
 - `client.ts` 统一封装 fetch：JSON 序列化、错误归一化为 `ApiError { status, code, message }`（与 MVP `api.js` 语义一致：`BACKEND_UNREACHABLE`、`ARTICLE_RUN_ACTIVE`、`MODEL_NOT_CONFIGURED` 等 code 原样透出）。
 - `types.ts` 与后端契约一一对应，作为类型单一事实源；后续可评估 openapi-typescript 自动生成，本期手工维护。
 
+**文章本地导出（纯前端）**：
+
+- `ExportArticleModal` 只选择正式版本与文件格式；当前版本复用 workspace 完整正文，已查看历史版本复用 `['version', articleId, versionId]` 缓存，其他历史版本通过同一 Query key 按需拉取。
+- Markdown 导出原样写入 `content_markdown`；TXT 使用 `unified + remark-parse + remark-gfm` 构建 Markdown AST 后转换为纯文本，避免正则剥离破坏嵌套列表、链接或代码块。
+- 用户点击导出后优先立即调用 File System Access API `showSaveFilePicker`（先取得文件句柄，再按需请求历史正文，避免异步请求导致浏览器用户激活失效），由系统窗口选择文件名和路径；API 不可用时以 Blob URL + `<a download>` 降级。用户取消原生窗口不触发降级或错误提示。
+- 文件仅在浏览器本地生成和写入，不新增后端导出接口，不上传本地路径，不读取 SSE 流式临时正文。
+
 ### 6.4 SSE 客户端
 
 `lib/sse.ts` 封装：
@@ -341,17 +348,17 @@ CORS：开发模式继续允许 `http://localhost:5173` / `http://127.0.0.1:5173
 
 ### 6.6 关键组件映射（MVP → React）
 
-| MVP 模块 | React 目标 |
-|---|---|
-| `js/common/shell.js` + `css/shell.css` | `layouts/AppLayout.tsx`（AntD Layout/Sider/Menu） |
-| `js/api.js` | `src/api/*`（client + 领域模块） |
-| `js/workspace/stream.js` | `lib/sse.ts` + `features/article-workspace/hooks/useRunStream.ts` |
-| `js/workspace/render-messages.js` | `components/MessageList`（含失败卡片、重试按钮） |
-| `js/workspace/render-article.js` | 正文面板 + `components/MarkdownView` |
-| `js/workspace/render-versions.js` | `components/VersionPanel` |
-| `js/image-workspace/params.js` | `features/image-workspace/components/ImageParamsPopover`（AntD Popover） |
-| `js/common/markdown.js` | react-markdown 替代（能力对齐：标题/列表/代码块/段落） |
-| 各页 `state.js`/`render.js`/`app.js` | TanStack Query + 组件树 + feature hooks |
+| MVP 模块                               | React 目标                                                               |
+| -------------------------------------- | ------------------------------------------------------------------------ |
+| `js/common/shell.js` + `css/shell.css` | `layouts/AppLayout.tsx`（AntD Layout/Sider/Menu）                        |
+| `js/api.js`                            | `src/api/*`（client + 领域模块）                                         |
+| `js/workspace/stream.js`               | `lib/sse.ts` + `features/article-workspace/hooks/useRunStream.ts`        |
+| `js/workspace/render-messages.js`      | `components/MessageList`（含失败卡片、重试按钮）                         |
+| `js/workspace/render-article.js`       | 正文面板 + `components/MarkdownView`                                     |
+| `js/workspace/render-versions.js`      | `components/VersionPanel`                                                |
+| `js/image-workspace/params.js`         | `features/image-workspace/components/ImageParamsPopover`（AntD Popover） |
+| `js/common/markdown.js`                | react-markdown 替代（能力对齐：标题/列表/代码块/段落）                   |
+| 各页 `state.js`/`render.js`/`app.js`   | TanStack Query + 组件树 + feature hooks                                  |
 
 ## 7. 开发工作流
 
@@ -387,11 +394,11 @@ server: {
 
 ## 8. 测试策略
 
-| 层级 | 工具 | 范围 |
-|---|---|---|
-| 后端单元/契约 | pytest（迁移） | 全量迁移 MVP 测试，保证契约不变 |
-| 前端组件 | Vitest + Testing Library | MarkdownView 安全渲染、MessageList 分型与失败卡片、SSE hooks 事件分发、模型切换禁用逻辑 |
-| E2E | Playwright | MVP T003 场景 A–G 主路径 + 配图/素材主路径，跑在生产构建 + 后端托管形态上 |
+| 层级          | 工具                     | 范围                                                                                    |
+| ------------- | ------------------------ | --------------------------------------------------------------------------------------- |
+| 后端单元/契约 | pytest（迁移）           | 全量迁移 MVP 测试，保证契约不变                                                         |
+| 前端组件      | Vitest + Testing Library | MarkdownView 安全渲染、MessageList 分型与失败卡片、SSE hooks 事件分发、模型切换禁用逻辑 |
+| E2E           | Playwright               | MVP T003 场景 A–G 主路径 + 配图/素材主路径，跑在生产构建 + 后端托管形态上               |
 
 E2E 环境复用后端假模型（`tests/fakes.py`）机制，不依赖真实 API Key。
 
@@ -409,10 +416,10 @@ cd backend && uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 ## 10. 风险与对策
 
-| 风险 | 对策 |
-|---|---|
-| 前端重写引入行为回归 | 以 PRD + MVP 契约测试为基线；E2E 复用 MVP 验收场景逐条复验 |
-| SSE 经 Vite proxy 的流式兼容 | dev 用 proxy、直连两种方式各验证一次；proxy 配置 `changeOrigin` 并确认无缓冲 |
-| AntD 默认样式与工作台专注布局冲突 | 工作台页使用自定义布局，AntD 主要用于列表/表单/浮层/反馈组件 |
-| 手工维护 TS 契约类型漂移 | 契约测试 + `types.ts` 注释锚定后端 schema；后续可引入 openapi-typescript |
-| 包结构合并导致隐性破坏 | 迁移后全量 pytest 通过作为唯一迁移完成标准 |
+| 风险                              | 对策                                                                         |
+| --------------------------------- | ---------------------------------------------------------------------------- |
+| 前端重写引入行为回归              | 以 PRD + MVP 契约测试为基线；E2E 复用 MVP 验收场景逐条复验                   |
+| SSE 经 Vite proxy 的流式兼容      | dev 用 proxy、直连两种方式各验证一次；proxy 配置 `changeOrigin` 并确认无缓冲 |
+| AntD 默认样式与工作台专注布局冲突 | 工作台页使用自定义布局，AntD 主要用于列表/表单/浮层/反馈组件                 |
+| 手工维护 TS 契约类型漂移          | 契约测试 + `types.ts` 注释锚定后端 schema；后续可引入 openapi-typescript     |
+| 包结构合并导致隐性破坏            | 迁移后全量 pytest 通过作为唯一迁移完成标准                                   |

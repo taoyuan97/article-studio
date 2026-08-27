@@ -285,6 +285,18 @@ body {
   font-weight: 600;
 }
 
+.article-workspace-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.article-export-entry {
+  display: inline-flex;
+}
+
 .status-pill {
   display: inline-flex;
   align-items: center;
@@ -1120,6 +1132,37 @@ body {
 
 .workspace-topbar .workspace-publish-entry {
   flex: none;
+}
+
+/* ---------- 文章导出 ---------- */
+
+.article-export-form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding-top: 8px;
+}
+
+.article-export-field {
+  display: grid;
+  grid-template-columns: 80px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+}
+
+.article-export-field > .ant-select {
+  width: 100%;
+}
+
+.article-export-field label,
+.article-export-label {
+  color: rgba(5, 5, 5, 0.65);
+}
+
+.article-export-hint {
+  margin: 0;
+  color: rgba(5, 5, 5, 0.45);
+  font-size: 12px;
 }
 
 .publish-steps {

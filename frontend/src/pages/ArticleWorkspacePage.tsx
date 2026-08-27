@@ -1,15 +1,16 @@
 import { useCallback, useEffect, useReducer, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router-dom'
-import { App, Button, Input, Spin } from 'antd'
+import { App, Button, Input, Spin, Tooltip } from 'antd'
 import { articlesApi } from '../api/articles'
 import type { ApiError } from '../api/client'
-import type { ArticleWorkspace } from '../api/types'
+import type { ArticleVersion, ArticleWorkspace } from '../api/types'
 import MarkdownView from '../components/MarkdownView'
 import MessageList from '../components/MessageList'
 import ModelSelect from '../components/ModelSelect'
 import StatusBanner from '../components/StatusBanner'
 import VersionPanel from '../components/VersionPanel'
+import ExportArticleModal from '../features/article-export/ExportArticleModal'
 import { useArticleRunStream } from '../hooks/useArticleRunStream'
 import type { ArticleRunEventType, RunEventData } from '../lib/sse'
 
@@ -80,6 +81,7 @@ export default function ArticleWorkspacePage() {
   const [runState, dispatch] = useReducer(runReducer, initialRunState)
   const [inputValue, setInputValue] = useState('')
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null)
+  const [exportModalOpen, setExportModalOpen] = useState(false)
 
   const workspace = workspaceQuery.data
   const article = workspace?.article ?? null
@@ -226,6 +228,19 @@ export default function ArticleWorkspacePage() {
     selectedVersion?.content_markdown || runState.temporaryArticle || currentVersion?.content_markdown || ''
   const streaming = Boolean(runState.temporaryArticle && !selectedVersion)
 
+  const resolveExportVersion = useCallback(
+    async (versionId: string): Promise<ArticleVersion> => {
+      if (!articleId) throw new Error('文章不存在')
+      if (currentVersion?.id === versionId) return currentVersion
+      if (selectedVersion?.id === versionId) return selectedVersion
+      return queryClient.fetchQuery({
+        queryKey: ['version', articleId, versionId],
+        queryFn: () => articlesApi.getVersion(articleId, versionId),
+      })
+    },
+    [articleId, currentVersion, queryClient, selectedVersion],
+  )
+
   const loadError = (workspaceQuery.error as ApiError | null) ?? null
   const notFound = loadError?.status === 404
 
@@ -256,14 +271,28 @@ export default function ArticleWorkspacePage() {
             {article?.title || (workspaceQuery.isPending ? '载入中……' : '文章')}
           </h1>
         </div>
-        <span className="status-pill" data-running={String(running)} aria-live="polite">
-          {running ? '正在生成' : '准备就绪'}
-        </span>
-        {articleId && (
-          <Link to={`/publish?article_id=${encodeURIComponent(articleId)}`}>
-            <Button className="workspace-publish-entry">发布到公众号</Button>
-          </Link>
-        )}
+        <div className="article-workspace-actions">
+          <span className="status-pill" data-running={String(running)} aria-live="polite">
+            {running ? '正在生成' : '准备就绪'}
+          </span>
+          <Tooltip
+            title={!workspaceQuery.isPending && !currentVersion ? '请先生成文章内容' : undefined}
+          >
+            <span className="article-export-entry">
+              <Button
+                disabled={workspaceQuery.isPending || !currentVersion}
+                onClick={() => setExportModalOpen(true)}
+              >
+                导出
+              </Button>
+            </span>
+          </Tooltip>
+          {articleId && (
+            <Link to={`/publish?article_id=${encodeURIComponent(articleId)}`}>
+              <Button className="workspace-publish-entry">发布到公众号</Button>
+            </Link>
+          )}
+        </div>
       </div>
 
       {loadError && (
@@ -363,6 +392,13 @@ export default function ArticleWorkspacePage() {
           </div>
         </section>
       </div>
+      <ExportArticleModal
+        open={exportModalOpen}
+        versions={workspace?.versions ?? []}
+        defaultVersionId={displayedVersion?.id ?? null}
+        onCancel={() => setExportModalOpen(false)}
+        resolveVersion={resolveExportVersion}
+      />
     </div>
   )
 }
