@@ -164,7 +164,7 @@ test.describe('发布线场景', () => {
     await expect(row).toBeVisible()
     await expect(row).toContainText('成功')
 
-    // 快照详情：元信息 + 配图回显 + 正文渲染
+    // 快照详情：元信息 + 正文内配图回显 + 正文渲染
     await row.getByRole('button', { name: '查看快照' }).click()
     await expect(page).toHaveURL(/\/publish-records\/[0-9a-f-]{36}$/)
     await expect(page.locator('.workspace-title')).toHaveText('发布快照')
@@ -175,7 +175,8 @@ test.describe('发布线场景', () => {
       /^FAKE_MEDIA_[0-9a-f]{8}$/,
     )
     await expect(page.locator('.publish-snapshot-cover img')).toBeVisible()
-    await expect(page.locator('.publish-snapshot-gallery img')).toHaveCount(2)
+    await expect(page.locator('.publish-snapshot-gallery')).toHaveCount(0)
+    await expect(page.locator('.publish-snapshot-body img')).toHaveCount(2)
     await expect(page.locator('.publish-snapshot-body')).toContainText('结语')
   })
 

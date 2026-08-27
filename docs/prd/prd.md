@@ -280,7 +280,7 @@ Article Studio
 
 **FR-R2 快照详情**
 
-- 只读渲染发布时完整内容：元信息（标题/主题/作者/封面/media_id/状态/时间）、配图回显、正文（frontmatter 剥离 + Markdown 白名单渲染）。
+- 只读渲染发布时完整内容：元信息（标题/主题/作者/封面/media_id/状态/时间）、正文内配图回显、正文（frontmatter 剥离 + Markdown 白名单渲染）。
 
 ### 5.8 全局行为
 

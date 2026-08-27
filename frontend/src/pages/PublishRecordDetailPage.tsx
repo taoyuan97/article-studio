@@ -36,12 +36,6 @@ export default function PublishRecordDetailPage() {
   const assetById = useMemo(() => new Map(assets.map((asset) => [asset.id, asset])), [assets])
 
   const coverAsset = record?.cover_asset_id ? assetById.get(record.cover_asset_id) : undefined
-  const snapshotAssets = useMemo(() => {
-    if (!record) return []
-    return record.image_placements
-      .map((placement) => assetById.get(placement.asset_id))
-      .filter((asset): asset is NonNullable<typeof asset> => Boolean(asset))
-  }, [record, assetById])
 
   const bodyMarkdown = useMemo(() => {
     if (!record) return ''
@@ -124,24 +118,6 @@ export default function PublishRecordDetailPage() {
           </div>
         )}
       </div>
-
-      {snapshotAssets.length > 0 && (
-        <div className="publish-snapshot-gallery">
-          <Typography.Text type="secondary">配图（{snapshotAssets.length}）</Typography.Text>
-          <Image.PreviewGroup>
-            {snapshotAssets.map((asset) => (
-              <Image
-                key={asset.id}
-                src={resolveImageUrl(asset.storage_url)}
-                alt={asset.title}
-                width={72}
-                height={72}
-                style={{ objectFit: 'cover' }}
-              />
-            ))}
-          </Image.PreviewGroup>
-        </div>
-      )}
 
       <section className="publish-snapshot-body" aria-label="发布内容快照">
         <MarkdownView content={bodyMarkdown} />

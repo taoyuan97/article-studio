@@ -87,7 +87,7 @@ describe('PublishRecordDetailPage', () => {
     })
   })
 
-  it('元信息面板完整：标题 / 主题 / media_id / 作者 / 时间 / 封面缩略图', async () => {
+  it('元信息面板完整，并且配图仅在发布内容快照中展示', async () => {
     fetchPublishRecordDetail.mockResolvedValue({
       id: 'rec-1',
       article_id: 'a1',
@@ -111,12 +111,16 @@ describe('PublishRecordDetailPage', () => {
     expect(screen.getByText('测试文章')).toBeInTheDocument()
     expect(screen.getByText('作者甲')).toBeInTheDocument()
     expect(screen.getByText('default')).toBeInTheDocument()
-    // 封面与配图缩略图在素材列表查询返回后渲染，需等待
+    // 封面与正文配图在素材列表查询返回后渲染，需等待
     expect(await screen.findByAltText('素材 cover')).toHaveAttribute(
       'src',
       '/static/assets/images/cover-dir/cover.png',
     )
-    expect(await screen.findByAltText('素材 p1')).toBeInTheDocument()
+    expect(document.querySelector('.publish-snapshot-gallery')).not.toBeInTheDocument()
+    expect(document.querySelector('.publish-snapshot-body img')).toHaveAttribute(
+      'src',
+      '/static/assets/images/p1-dir/p1.png',
+    )
   })
 
   it('frontmatter 剥离后只读渲染：正文可见、frontmatter 不渲染、恶意 HTML 不执行', async () => {

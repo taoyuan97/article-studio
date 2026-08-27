@@ -1584,13 +1584,6 @@ body {
   gap: 4px;
 }
 
-.publish-snapshot-gallery {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-bottom: 16px;
-}
-
 .publish-snapshot-body {
   padding: 24px 28px;
   background: #ffffff;
