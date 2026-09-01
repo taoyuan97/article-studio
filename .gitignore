@@ -9,6 +9,7 @@
 prototype/
 
 # 开发文档
-docs/
+docs/article
+docs/ops
 
 # 各工程自身忽略规则见 frontend/.gitignore、backend/.gitignore
