@@ -5,7 +5,10 @@
 .uv-cache/
 .playwright-browsers/
 
-# 各工程自身忽略规则见 frontend/.gitignore、backend/.gitignore
-
 # 原型文件
 prototype/
+
+# 开发文档
+docs/
+
+# 各工程自身忽略规则见 frontend/.gitignore、backend/.gitignore
