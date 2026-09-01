@@ -18,6 +18,7 @@ function makeMessage(overrides: Partial<Message>): Message {
     model: 'deepseek-model',
     created_at: '2026-08-23T10:00:00Z',
     completed_at: '2026-08-23T10:00:01Z',
+    attachments: [],
     ...overrides,
   }
 }
@@ -147,5 +148,30 @@ describe('MessageList', () => {
 
     const temporary = screen.getByText('正在生成中的临时回复').closest('section')
     expect(temporary).toHaveClass('message-temporary')
+  })
+
+  it('用户消息展示附件元数据且不提供内容操作', () => {
+    render(
+      <MessageList
+        messages={[
+          makeMessage({
+            attachments: [
+              {
+                id: 'att-1',
+                name: '很长的参考资料.md',
+                size: 1536,
+                media_type: 'text/markdown',
+              },
+            ],
+          }),
+        ]}
+      />,
+    )
+    expect(screen.getByText('很长的参考资料.md').closest('.message-attachment')).toHaveAttribute(
+      'title',
+      '很长的参考资料.md',
+    )
+    expect(screen.getByText('1.5 KB')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /预览|下载|删除/ })).not.toBeInTheDocument()
   })
 })

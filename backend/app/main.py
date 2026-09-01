@@ -31,6 +31,11 @@ from article_agent.registry import ModelRegistry
 
 from .database import NotFoundError, Repository, RunNotActiveError
 from .image_service import ImageRunManager
+from .message_attachments import (
+    AttachmentValidationError,
+    MessageAttachmentRequest,
+    validate_attachments,
+)
 from .plan_service import PlanError, generate_image_plan
 from .publish_service import (
     build_publish_markdown,
@@ -45,6 +50,7 @@ from .wenyan_client import PublishError, WenyanMcpClient
 
 class MessageCreate(BaseModel):
     content: str = Field(min_length=1, max_length=100_000)
+    attachments: list[MessageAttachmentRequest] = Field(default_factory=list)
 
 
 class ModelUpdate(BaseModel):
@@ -294,6 +300,17 @@ def create_app(
             content={"error": {"code": code, "message": str(exc)}},
         )
 
+    @application.exception_handler(AttachmentValidationError)
+    async def handle_attachment_validation(
+        _request: Request, exc: AttachmentValidationError
+    ):
+        from fastapi.responses import JSONResponse
+
+        return JSONResponse(
+            status_code=422,
+            content={"error": {"code": exc.code, "message": exc.message}},
+        )
+
     _PUBLISH_ERROR_STATUS: dict[str, int] = {
         "PUBLISH_CREDENTIALS_MISSING": 422,
         "PUBLISH_NO_CONTENT": 422,
@@ -456,7 +473,10 @@ def create_app(
         "/api/articles/{article_id}/messages", status_code=status.HTTP_202_ACCEPTED
     )
     async def post_message(article_id: str, payload: MessageCreate, request: Request):
-        run = await manager(request).start(article_id, content=payload.content)
+        attachments = validate_attachments(payload.attachments)
+        run = await manager(request).start(
+            article_id, content=payload.content, attachments=attachments
+        )
         return run_response(run)
 
     @application.post(

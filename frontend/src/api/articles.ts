@@ -9,6 +9,7 @@ import type {
   CancelRunResponse,
   HealthResponse,
   MessageListResponse,
+  SendArticleMessageRequest,
   Stats,
 } from './types'
 
@@ -44,10 +45,10 @@ export const articlesApi = {
     )
   },
 
-  sendMessage: (articleId: string, content: string) =>
+  sendMessage: (articleId: string, payload: SendArticleMessageRequest) =>
     apiRequest<ArticleRunResponse>(`/api/articles/${encodeURIComponent(articleId)}/messages`, {
       method: 'POST',
-      body: { content },
+      body: payload,
     }),
 
   retryMessage: (articleId: string, messageId: string) =>

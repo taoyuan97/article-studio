@@ -8,12 +8,13 @@ import type { ArticleVersion, ArticleWorkspace } from '../api/types'
 
 const getWorkspace = vi.fn()
 const getVersion = vi.fn()
+const sendMessage = vi.fn()
 
 vi.mock('../api/articles', () => ({
   articlesApi: {
     getWorkspace: (...args: unknown[]) => getWorkspace(...args),
     getVersion: (...args: unknown[]) => getVersion(...args),
-    sendMessage: vi.fn(),
+    sendMessage: (...args: unknown[]) => sendMessage(...args),
     retryMessage: vi.fn(),
     updateModel: vi.fn(),
     cancelRun: vi.fn(),
@@ -108,6 +109,13 @@ describe('ArticleWorkspacePage export entry', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     getVersion.mockResolvedValue(HISTORY_VERSION)
+    sendMessage.mockResolvedValue({
+      run_id: 'run-attachment',
+      article_id: 'a1',
+      user_message_id: 'user-attachment',
+      status: 'queued',
+      events_url: '/api/runs/run-attachment/events',
+    })
   })
 
   it('导出按钮位于发布入口之前，弹窗默认选中当前展示版本', async () => {
@@ -153,5 +161,47 @@ describe('ArticleWorkspacePage export entry', () => {
     expect(exportButton).toBeDisabled()
     await user.hover(exportButton.parentElement!)
     expect(await screen.findByText('请先生成文章内容')).toBeInTheDocument()
+  })
+
+  it('附件不能替代文字指令，发送时提交附件快照并在 202 后清空', async () => {
+    const user = userEvent.setup()
+    getWorkspace.mockResolvedValue(makeWorkspace())
+    renderPage()
+
+    await screen.findByText('当前：v2 · 当前版本')
+    const input = await screen.findByLabelText('选择参考资料')
+    await user.upload(input, new File(['# 参考\n独有内容'], 'reference.md', { type: 'text/markdown' }))
+    expect(await screen.findByText('reference.md')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^发\s*送$/ })).toBeDisabled()
+
+    await user.type(
+      screen.getByPlaceholderText(/直接写一篇面向职场新人/),
+      '请根据附件写文章',
+    )
+    await user.click(screen.getByRole('button', { name: /^发\s*送$/ }))
+    await waitFor(() =>
+      expect(sendMessage).toHaveBeenCalledWith('a1', {
+        content: '请根据附件写文章',
+        attachments: [{ name: 'reference.md', content: '# 参考\n独有内容' }],
+      }),
+    )
+    await waitFor(() => expect(screen.queryByText('reference.md')).not.toBeInTheDocument())
+    expect(screen.getByPlaceholderText(/直接写一篇面向职场新人/)).toHaveValue('')
+  })
+
+  it('生成期间仍可准备下一轮附件但发送保持禁用', async () => {
+    const user = userEvent.setup()
+    getWorkspace.mockResolvedValue(makeWorkspace())
+    renderPage()
+    await screen.findByText('当前：v2 · 当前版本')
+    await user.type(screen.getByPlaceholderText(/直接写一篇面向职场新人/), '第一轮')
+    await user.click(screen.getByRole('button', { name: /^发\s*送$/ }))
+    await screen.findByText('正在生成')
+
+    const input = screen.getByLabelText('选择参考资料')
+    await user.upload(input, new File(['下一轮'], 'next.txt', { type: 'text/plain' }))
+    expect(await screen.findByText('next.txt')).toBeInTheDocument()
+    await user.type(screen.getByPlaceholderText(/直接写一篇面向职场新人/), '下一轮指令')
+    expect(screen.getByRole('button', { name: /^发\s*送$/ })).toBeDisabled()
   })
 })

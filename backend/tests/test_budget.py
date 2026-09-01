@@ -74,7 +74,41 @@ async def test_required_content_over_limit_has_readable_error():
         )
 
 
+async def test_current_attachment_is_complete_and_history_attachment_can_truncate():
+    history = [
+        HumanMessage(
+            content="历史指令必须保留",
+            id="history",
+            additional_kwargs={
+                "article_attachments": [
+                    {"name": "history.txt", "content": "历史资料" * 500}
+                ]
+            },
+        ),
+        HumanMessage(
+            content="当前指令",
+            id="latest",
+            additional_kwargs={
+                "article_attachments": [
+                    {"name": "current.md", "content": "当前完整资料"}
+                ]
+            },
+        ),
+    ]
+    result = await ContextBudgeter(recent_message_limit=4).build(
+        capabilities=capabilities(context_window=500, max_output=50),
+        system_prompt="规则",
+        latest_instruction="当前指令",
+        latest_attachments=history[-1].additional_kwargs["article_attachments"],
+        brief=ArticleBrief(topic="附件"),
+        history=history,
+    )
+    text = "\n".join(str(message.content) for message in result.messages)
+    assert "历史指令必须保留" in text
+    assert "历史附件内容因上下文预算已截断" in text
+    assert "当前完整资料" in text
+
+
 def test_usage_ratio_cannot_exceed_eighty_percent():
     with pytest.raises(ValueError, match="0.80"):
         ContextBudgeter(0.81)
-

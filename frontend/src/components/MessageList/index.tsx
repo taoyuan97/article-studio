@@ -1,6 +1,7 @@
 import { memo, useEffect, useRef } from 'react'
 import { Button } from 'antd'
 import type { Message } from '../../api/types'
+import { formatFileSize } from '../../features/article-workspace/attachments'
 
 /** 消息分型标签（与 MVP render-messages.js 一致） */
 const TYPE_LABELS: Record<string, string> = {
@@ -43,6 +44,16 @@ function MessageItem({
         {isUser ? '你' : (TYPE_LABELS[message.message_type] ?? '智能体')}
       </span>
       <p className="message-body">{message.content}</p>
+      {isUser && message.attachments.length > 0 && (
+        <div className="message-attachments" aria-label="消息附件">
+          {message.attachments.map((attachment) => (
+            <span key={attachment.id} className="message-attachment" title={attachment.name}>
+              <span className="message-attachment-name">{attachment.name}</span>
+              <span>{formatFileSize(attachment.size)}</span>
+            </span>
+          ))}
+        </div>
+      )}
       {failed && (
         <>
           <details className="message-error-details">

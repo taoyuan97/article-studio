@@ -100,7 +100,7 @@ class ArticleAgent:
             chunks: list[str] = []
             usage: dict[str, Any] | None = None
             provider_stream = self.nodes.model(working).astream(
-                context.messages, config=self.nodes.config
+                context.messages, config=self.nodes.invocation_config(working)
             )
             try:
                 async for chunk in provider_stream:

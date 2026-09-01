@@ -51,6 +51,17 @@ CREATE TABLE IF NOT EXISTS messages (
     UNIQUE(conversation_id, sequence_number)
 );
 
+CREATE TABLE IF NOT EXISTS message_attachments (
+    id TEXT PRIMARY KEY,
+    message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    media_type TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    content TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS article_versions (
     id TEXT PRIMARY KEY,
     article_id TEXT NOT NULL REFERENCES articles(id),
@@ -177,6 +188,7 @@ CREATE TABLE IF NOT EXISTS image_plans (
 
 CREATE INDEX IF NOT EXISTS idx_articles_updated ON articles(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_messages_conversation_sequence ON messages(conversation_id, sequence_number);
+CREATE INDEX IF NOT EXISTS idx_message_attachments_message ON message_attachments(message_id, position ASC);
 CREATE INDEX IF NOT EXISTS idx_versions_article_number ON article_versions(article_id, version_number DESC);
 CREATE INDEX IF NOT EXISTS idx_runs_article_status ON generation_runs(article_id, status);
 CREATE INDEX IF NOT EXISTS idx_image_sessions_article ON image_generation_sessions(article_id);
@@ -341,6 +353,7 @@ class Repository:
         article_id: str,
         *,
         content: str | None = None,
+        attachments: list[dict[str, Any]] | None = None,
         retry_message_id: str | None = None,
     ) -> dict[str, Any]:
         run_id = str(uuid4())
@@ -395,6 +408,22 @@ class Repository:
                         timestamp,
                     ),
                 )
+                for position, attachment in enumerate(attachments or []):
+                    connection.execute(
+                        """INSERT INTO message_attachments
+                           (id,message_id,name,media_type,size,content,position,created_at)
+                           VALUES (?,?,?,?,?,?,?,?)""",
+                        (
+                            str(uuid4()),
+                            user_message_id,
+                            attachment["name"],
+                            attachment["media_type"],
+                            attachment["size"],
+                            attachment["content"],
+                            position,
+                            timestamp,
+                        ),
+                    )
                 if article["title"] == "未命名文章" and not article["current_version_id"]:
                     connection.execute(
                         "UPDATE articles SET title=? WHERE id=?",
@@ -739,17 +768,84 @@ class Repository:
             ).fetchone()
         return dict(row)
 
-    def get_message(self, message_id: str) -> dict[str, Any]:
+    @staticmethod
+    def _attachments_by_message(
+        connection: sqlite3.Connection,
+        message_ids: list[str],
+        *,
+        include_content: bool,
+    ) -> dict[str, list[dict[str, Any]]]:
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        content_column = ",content" if include_content else ""
+        # workspace can contain thousands of messages; keep each query below
+        # conservative SQLite bind-variable limits.
+        for start in range(0, len(message_ids), 500):
+            chunk = message_ids[start : start + 500]
+            if not chunk:
+                continue
+            placeholders = ",".join("?" for _ in chunk)
+            rows = connection.execute(
+                f"""SELECT id,message_id,name,media_type,size{content_column}
+                    FROM message_attachments
+                    WHERE message_id IN ({placeholders})
+                    ORDER BY message_id,position ASC,id ASC""",
+                chunk,
+            ).fetchall()
+            for row in rows:
+                item = {
+                    "id": row["id"],
+                    "name": row["name"],
+                    "media_type": row["media_type"],
+                    "size": row["size"],
+                }
+                if include_content:
+                    item["content"] = row["content"]
+                grouped.setdefault(row["message_id"], []).append(item)
+        return grouped
+
+    @classmethod
+    def _messages_with_attachments(
+        cls,
+        connection: sqlite3.Connection,
+        rows: list[sqlite3.Row],
+        *,
+        include_content: bool,
+    ) -> list[dict[str, Any]]:
+        attachments = cls._attachments_by_message(
+            connection,
+            [row["id"] for row in rows],
+            include_content=include_content,
+        )
+        return [
+            {**dict(row), "attachments": attachments.get(row["id"], [])}
+            for row in rows
+        ]
+
+    def get_message(
+        self, message_id: str, *, include_attachment_content: bool = False
+    ) -> dict[str, Any]:
         with self.connect() as connection:
             row = connection.execute(
                 "SELECT * FROM messages WHERE id=?", (message_id,)
             ).fetchone()
+            items = (
+                self._messages_with_attachments(
+                    connection, [row], include_content=include_attachment_content
+                )
+                if row is not None
+                else []
+            )
         if row is None:
             raise NotFoundError("消息不存在")
-        return dict(row)
+        return items[0]
 
     def list_messages(
-        self, article_id: str, *, before: str | None = None, limit: int = 100
+        self,
+        article_id: str,
+        *,
+        before: str | None = None,
+        limit: int = 100,
+        include_attachment_content: bool = False,
     ) -> list[dict[str, Any]]:
         article = self.get_article(article_id)
         params: list[Any] = [article["conversation_id"]]
@@ -784,7 +880,12 @@ class Repository:
                        ORDER BY m.sequence_number DESC LIMIT ?""",
                     params,
                 ).fetchall()
-        return [dict(row) for row in reversed(rows)]
+            ordered = list(reversed(rows))
+            return self._messages_with_attachments(
+                connection,
+                ordered,
+                include_content=include_attachment_content,
+            )
 
     def list_versions(self, article_id: str) -> list[dict[str, Any]]:
         self.get_article(article_id)
@@ -806,7 +907,9 @@ class Repository:
             raise NotFoundError("版本不存在")
         return dict(row)
 
-    def workspace(self, article_id: str) -> dict[str, Any]:
+    def workspace(
+        self, article_id: str, *, include_attachment_content: bool = False
+    ) -> dict[str, Any]:
         article = self.get_article(article_id)
         current = (
             self.get_version(article_id, article["current_version_id"])
@@ -816,7 +919,11 @@ class Repository:
         return {
             "article": article,
             "current_version": current,
-            "messages": self.list_messages(article_id, limit=10000),
+            "messages": self.list_messages(
+                article_id,
+                limit=10000,
+                include_attachment_content=include_attachment_content,
+            ),
             "versions": self.list_versions(article_id),
         }
 

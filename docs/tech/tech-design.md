@@ -155,7 +155,7 @@ GET    /api/health                                  健康检查
 GET    /api/articles/{id}/workspace                 工作台聚合接口
 PATCH  /api/articles/{id}/model                     切换模型（运行中 409）
 GET    /api/articles/{id}/messages?before&limit     消息列表（游标分页）
-POST   /api/articles/{id}/messages                  发送消息 → 202 + run
+POST   /api/articles/{id}/messages                  发送消息（可带 md/txt 参考资料）→ 202 + run
 POST   /api/articles/{id}/messages/{mid}/retry      重试 → 202 + run
 GET    /api/articles/{id}/versions                  版本列表
 GET    /api/articles/{id}/versions/{vid}            版本详情
@@ -241,7 +241,7 @@ run 响应结构（两条线同构）：
 
 ### 5.4 数据存储
 
-- `data/article.sqlite3`：articles、conversations、messages、article_versions、generation_runs、image_generation_sessions、image_generation_messages、image_runs、assets、publish_records（T008：发布记录，含 theme/cover/author/image_placements/content_snapshot/status/media_id/error_code/error_message）、image_plans（T015：配图方案，每会话覆盖式保留最近一条，含 role/instructions/provider/model/result_json）。
+- `data/article.sqlite3`：articles、conversations、messages、message_attachments（T017：文章消息的 Markdown/TXT 参考资料正文与元数据）、article_versions、generation_runs、image_generation_sessions、image_generation_messages、image_runs、assets、publish_records（T008：发布记录，含 theme/cover/author/image_placements/content_snapshot/status/media_id/error_code/error_message）、image_plans（T015：配图方案，每会话覆盖式保留最近一条，含 role/instructions/provider/model/result_json）。
 - `data/checkpoints.sqlite3`：LangGraph AsyncSqliteSaver。
 - `data/assets/`：图片文件。
 - `data/publish_tmp/`：发布组装 Markdown 临时文件（发布结束即删，快照持久化于 publish_records）。
@@ -277,6 +277,16 @@ PUBLISH_FAKE_MODE=false   # true 时不启动子进程、不外呼（开发/测�
 - **默认提示词（`article_agent/prompts.py`）**：`DEFAULT_IMAGE_PLAN_ROLE`（资深视觉编辑与插画艺术指导）+ `DEFAULT_IMAGE_PLAN_INSTRUCTIONS`（数量按字数映射（<1500 字 2-3 张 / 1500-3000 字 3-5 张 / 3000-6000 字 5-7 张 / >6000 字 7-9 张）、五感/空间/动作/情绪反差四项评分筛选高视觉潜力段落、统一风格前缀、默认中文输出）+ `IMAGE_PLAN_SYSTEM_PROMPT`（约束结构化输出）；role/instructions 用户可改，空值回填默认。
 - **错误码**：`PLAN_NO_CONTENT`(422) / `PLAN_LLM_NOT_CONFIGURED`(422) / `PLAN_LLM_ERROR`(502，`redact_sensitive` 脱敏) / `PLAN_TIMEOUT`(504，`asyncio.wait_for` 120s) / `PLAN_EMPTY`(502)；会话不存在沿用 404。
 - **前端**：`ImageWorkspacePage` 顶部 `Segmented`「计划/行动」（默认行动，模式按会话持久化 localStorage，与 tier/ratio 同机制；生图运行或编排 pending 时锁定切换）；计划模式左栏 `ImagePlanForm`（文章→版本联动 Select、LLM 模型 Select（只显示模型名）、角色/指令 TextArea（defaults 回填、最近方案回填）），右栏 `ImagePlanResults`（统计条 + 配图卡片（`#序号 · 第 n 块后 · 位置说明 · 排版标签`、prompt 预格式块、复制按钮（`clipboard.writeText` + `execCommand` 兜底，「已复制」反馈））、空态引导、错误 Banner + 重试、loading Spin）；API 封装 `src/api/imagePlan.ts`。
+
+### 5.8 文章消息附件（T017）
+
+- **请求契约**：`POST /api/articles/{article_id}/messages` 保持 JSON，载荷为 `{content, attachments?: [{name, content}]}`；附件只支持 UTF-8 `.md` / `.txt`。单次最多 5 个、单文件 200 KB、合计 1000 KB、正文合计 120,000 Unicode 字符。后端重新计算 UTF-8 字节数并校验文件名、扩展名、空正文和 NUL，错误码为 `ARTICLE_ATTACHMENT_{COUNT|NAME|TYPE|SIZE|CONTENT}_INVALID`。
+- **响应契约**：workspace 与消息分页的每条消息固定返回 `attachments` 数组，元素为 `{id,name,size,media_type}`；公共 API、SSE 和错误详情不返回附件正文。助手消息与无附件消息返回空数组。
+- **持久化**：`message_attachments` 通过 `message_id` 关联文章 `messages`，保存名称、媒体类型、UTF-8 字节数、正文、顺序和时间；用户消息、附件、generation run 同事务写入。retry 继续指向原用户消息，不复制附件。消息列表批量加载元数据，workspace 大批量读取按 SQLite bind 上限分块。
+- **运行态**：业务 SQLite 是附件正文事实源；`RunManager` 仅在构造模型运行状态时读取正文。checkpoint 保存附件标识/元数据而不保存正文。生成期间前端可继续准备下一轮文字和附件，但当前 run 完成前不能发送。
+- **两阶段模型输入**：意图识别只接收用户指令、附件数量和文件名，不接收正文；相关问答、文章生成和文章修改的最终调用接收当前完整附件。附件使用 JSON 序列化的 `<reference_attachment_json>` 边界，并声明其为不可信参考资料、不得覆盖系统指令。包含附件正文的最终调用关闭 tracing callbacks，避免参考资料进入 LangSmith 等回调记录。
+- **动态预算**：当前轮附件属于必需输入，按选择顺序完整加入具体模型的 80% 安全上下文预算，不静默截断；无法容纳时 run 以 `ARTICLE_CONTEXT_TOO_LARGE` 明确失败。历史消息文字优先，剩余 token 按消息由近到远加入历史附件，必要时截断正文并添加标记；历史附件不得挤占系统 Prompt、当前指令、当前完整附件、当前文章正文或最大输出预算。
+- **前端**：`features/article-workspace/attachments.ts` 集中实现严格 UTF-8 解码、BOM 去除、容量/字符/重复校验与大小格式化；“+”位于模型选择器左侧，待发送标签位于输入框与操作栏之间。已发送用户消息只展示附件名称和大小，不提供预览、下载或删除。
 
 CORS：开发模式继续允许 `http://localhost:5173` / `http://127.0.0.1:5173`（Vite dev server 默认端口，兜底直连场景）；开发主路径走 Vite proxy（同源，不触发 CORS）。
 

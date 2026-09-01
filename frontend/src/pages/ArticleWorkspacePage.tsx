@@ -1,16 +1,27 @@
-import { useCallback, useEffect, useReducer, useState } from 'react'
+import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router-dom'
 import { App, Button, Input, Spin, Tooltip } from 'antd'
+import { PlusOutlined } from '@ant-design/icons'
 import { articlesApi } from '../api/articles'
 import type { ApiError } from '../api/client'
-import type { ArticleVersion, ArticleWorkspace } from '../api/types'
+import type {
+  ArticleVersion,
+  ArticleWorkspace,
+  SendArticleMessageRequest,
+} from '../api/types'
 import MarkdownView from '../components/MarkdownView'
 import MessageList from '../components/MessageList'
 import ModelSelect from '../components/ModelSelect'
 import StatusBanner from '../components/StatusBanner'
 import VersionPanel from '../components/VersionPanel'
 import ExportArticleModal from '../features/article-export/ExportArticleModal'
+import {
+  MAX_ATTACHMENT_COUNT,
+  formatFileSize,
+  mergeSelectedFiles,
+  type PendingAttachment,
+} from '../features/article-workspace/attachments'
 import { useArticleRunStream } from '../hooks/useArticleRunStream'
 import type { ArticleRunEventType, RunEventData } from '../lib/sse'
 
@@ -80,6 +91,10 @@ export default function ArticleWorkspacePage() {
 
   const [runState, dispatch] = useReducer(runReducer, initialRunState)
   const [inputValue, setInputValue] = useState('')
+  const [attachments, setAttachments] = useState<PendingAttachment[]>([])
+  const [readingAttachments, setReadingAttachments] = useState(false)
+  const attachmentInputRef = useRef<HTMLInputElement>(null)
+  const previousArticleIdRef = useRef(articleId)
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null)
   const [exportModalOpen, setExportModalOpen] = useState(false)
 
@@ -155,10 +170,12 @@ export default function ArticleWorkspacePage() {
 
   // 发送 / 重试 / 取消 / 切换模型
   const sendMutation = useMutation({
-    mutationFn: (content: string) => articlesApi.sendMessage(articleId!, content),
+    mutationFn: (payload: SendArticleMessageRequest) =>
+      articlesApi.sendMessage(articleId!, payload),
     onSuccess: (run) => {
       dispatch({ type: 'start', runId: run.run_id })
       setInputValue('')
+      setAttachments([])
       invalidateWorkspace()
     },
     onError: (error: ApiError) => {
@@ -193,9 +210,38 @@ export default function ArticleWorkspacePage() {
 
   const handleSend = useCallback(() => {
     const content = inputValue.trim()
-    if (!content || running || !articleId) return
-    sendMutation.mutate(content)
-  }, [articleId, inputValue, running, sendMutation])
+    if (!content || running || sendMutation.isPending || !articleId) return
+    sendMutation.mutate({
+      content,
+      attachments: attachments.map(({ name, content: attachmentContent }) => ({
+        name,
+        content: attachmentContent,
+      })),
+    })
+  }, [articleId, attachments, inputValue, running, sendMutation])
+
+  const handleAttachmentChange = useCallback(
+    async (files: FileList | null) => {
+      if (!files || sendMutation.isPending || readingAttachments) return
+      setReadingAttachments(true)
+      try {
+        const result = await mergeSelectedFiles(attachments, Array.from(files))
+        setAttachments(result.accepted)
+        result.errors.forEach((error) => message.warning(error))
+      } finally {
+        setReadingAttachments(false)
+        if (attachmentInputRef.current) attachmentInputRef.current.value = ''
+      }
+    },
+    [attachments, message, readingAttachments, sendMutation.isPending],
+  )
+
+  useEffect(() => {
+    if (previousArticleIdRef.current === articleId) return
+    previousArticleIdRef.current = articleId
+    setAttachments([])
+    if (attachmentInputRef.current) attachmentInputRef.current.value = ''
+  }, [articleId])
 
   const handleCancel = useCallback(() => {
     if (!activeRunId) return
@@ -324,12 +370,68 @@ export default function ArticleWorkspacePage() {
             <Input.TextArea
               value={inputValue}
               onChange={(event) => setInputValue(event.target.value)}
-              disabled={workspaceQuery.isPending}
+              disabled={workspaceQuery.isPending || sendMutation.isPending}
               rows={4}
               maxLength={100_000}
               placeholder="例如：直接写一篇面向职场新人的文章，主题是如何保持专注……"
             />
+            {attachments.length > 0 && (
+              <div className="composer-attachments" aria-label="待发送附件">
+                {attachments.map((attachment) => (
+                  <span
+                    key={attachment.key}
+                    className="composer-attachment"
+                    title={attachment.name}
+                  >
+                    <span className="composer-attachment-name">{attachment.name}</span>
+                    <span>{formatFileSize(attachment.size)}</span>
+                    <button
+                      type="button"
+                      aria-label={`移除 ${attachment.name}`}
+                      disabled={sendMutation.isPending}
+                      onClick={() =>
+                        setAttachments((current) =>
+                          current.filter((item) => item.key !== attachment.key),
+                        )
+                      }
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
             <div className="composer-actions">
+              <input
+                ref={attachmentInputRef}
+                className="attachment-input"
+                type="file"
+                multiple
+                accept=".md,.txt,text/markdown,text/plain"
+                aria-label="选择参考资料"
+                disabled={workspaceQuery.isPending || sendMutation.isPending || readingAttachments}
+                onChange={(event) => void handleAttachmentChange(event.target.files)}
+              />
+              <Tooltip
+                title={
+                  attachments.length >= MAX_ATTACHMENT_COUNT
+                    ? '单次最多 5 个附件'
+                    : '添加参考资料'
+                }
+              >
+                <Button
+                  className="attachment-trigger"
+                  icon={<PlusOutlined />}
+                  aria-label="添加参考资料"
+                  disabled={
+                    workspaceQuery.isPending ||
+                    sendMutation.isPending ||
+                    readingAttachments ||
+                    attachments.length >= MAX_ATTACHMENT_COUNT
+                  }
+                  onClick={() => attachmentInputRef.current?.click()}
+                />
+              </Tooltip>
               <ModelSelect
                 available={workspace?.available_models ?? []}
                 unavailable={workspace?.unavailable_models ?? []}
@@ -346,7 +448,9 @@ export default function ArticleWorkspacePage() {
               <Button
                 type="primary"
                 loading={sendMutation.isPending}
-                disabled={running || !inputValue.trim()}
+                disabled={
+                  running || sendMutation.isPending || readingAttachments || !inputValue.trim()
+                }
                 onClick={handleSend}
               >
                 发送

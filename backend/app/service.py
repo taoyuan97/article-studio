@@ -7,6 +7,7 @@ from typing import Any
 from langchain_core.messages import AIMessage, HumanMessage
 
 from article_agent.agent import ArticleAgent
+from article_agent.budget import ContextBudgetExceeded
 from article_agent.cancellation import CancellationToken
 from article_agent.models import ArticleBrief, ArticleResult
 from article_agent.state import ArticleAgentState, initial_state
@@ -70,13 +71,17 @@ class RunManager:
         article_id: str,
         *,
         content: str | None = None,
+        attachments: list[dict[str, Any]] | None = None,
         retry_message_id: str | None = None,
     ) -> dict[str, Any]:
         async with self._lock:
             if article_id in self._active_by_article:
                 raise RunNotActiveError("ARTICLE_RUN_ACTIVE")
             run = self.repository.create_run(
-                article_id, content=content, retry_message_id=retry_message_id
+                article_id,
+                content=content,
+                attachments=attachments,
+                retry_message_id=retry_message_id,
             )
             context = RunContext(run["id"], article_id)
             self._runs[run["id"]] = context
@@ -86,14 +91,21 @@ class RunManager:
             )
         return run
 
-    async def _build_state(self, run: dict[str, Any]) -> ArticleAgentState:
-        workspace = self.repository.workspace(run["article_id"])
+    async def _build_state(
+        self, run: dict[str, Any], *, include_attachment_content: bool = True
+    ) -> ArticleAgentState:
+        workspace = self.repository.workspace(
+            run["article_id"],
+            include_attachment_content=include_attachment_content,
+        )
         article = workspace["article"]
         messages = []
         for item in workspace["messages"]:
             metadata = {"status": item["status"]}
             if item["message_type"] in ("redirect", "error"):
                 metadata["relevant"] = False
+            if item["role"] == "user":
+                metadata["article_attachments"] = item.get("attachments", [])
             message_class = HumanMessage if item["role"] == "user" else AIMessage
             messages.append(
                 message_class(
@@ -111,9 +123,18 @@ class RunManager:
             None,
         )
         if latest_human_id != run["user_message_id"]:
+            retry_source = self.repository.get_message(
+                run["user_message_id"],
+                include_attachment_content=include_attachment_content,
+            )
             messages.append(
                 HumanMessage(
-                    content=run["instruction"], id=f"retry-{run['id']}"
+                    content=run["instruction"],
+                    id=f"retry-{run['id']}",
+                    additional_kwargs={
+                        "status": "completed",
+                        "article_attachments": retry_source.get("attachments", []),
+                    },
                 )
             )
         current = workspace["current_version"]
@@ -140,7 +161,9 @@ class RunManager:
         return state
 
     async def _checkpoint_current(self, run: dict[str, Any]) -> None:
-        state = await self._build_state(self.repository.get_run(run["id"]))
+        state = await self._build_state(
+            self.repository.get_run(run["id"]), include_attachment_content=False
+        )
         await self.agent.checkpoint(state, thread_id=run["thread_id"])
 
     async def _execute(self, context: RunContext) -> None:
@@ -186,10 +209,17 @@ class RunManager:
                         "article.completed", version=version, article=self.repository.get_article(context.article_id)
                     )
                 elif event.type == "run.failed":
+                    error_type = str(event.data.get("error_type", "MODEL_ERROR"))
+                    context_too_large = error_type == "ContextBudgetExceeded"
                     await self._fail(
                         context,
                         event.data.get("message", "模型调用失败"),
-                        event.data.get("error_type", "MODEL_ERROR"),
+                        "ARTICLE_CONTEXT_TOO_LARGE" if context_too_large else error_type,
+                        readable=(
+                            str(event.data.get("message"))
+                            if context_too_large
+                            else "模型调用失败，请稍后重试。"
+                        ),
                     )
                     return
                 elif event.type == "run.cancelled":
@@ -225,6 +255,13 @@ class RunManager:
             await self._cancel(context)
         except RunNotActiveError:
             await self._cancel(context)
+        except ContextBudgetExceeded as exc:
+            await self._fail(
+                context,
+                exc,
+                "ARTICLE_CONTEXT_TOO_LARGE",
+                readable=str(exc),
+            )
         except Exception as exc:
             await self._fail(context, exc, type(exc).__name__)
         finally:
@@ -232,10 +269,14 @@ class RunManager:
             await context.finish()
 
     async def _fail(
-        self, context: RunContext, error: object, error_code: str
+        self,
+        context: RunContext,
+        error: object,
+        error_code: str,
+        *,
+        readable: str = "模型调用失败，请稍后重试。",
     ) -> None:
         detail = redact_sensitive(error, self.secret_values)
-        readable = "模型调用失败，请稍后重试。"
         message = self.repository.fail_run(
             context.run_id,
             message=readable,

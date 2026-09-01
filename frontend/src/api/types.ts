@@ -72,6 +72,23 @@ export type MessageType = 'chat' | 'clarification' | 'redirect' | 'generation' |
 
 export type MessageStatus = 'completed' | 'failed'
 
+export interface MessageAttachment {
+  id: string
+  name: string
+  size: number
+  media_type: 'text/markdown' | 'text/plain'
+}
+
+export interface SendMessageAttachment {
+  name: string
+  content: string
+}
+
+export interface SendArticleMessageRequest {
+  content: string
+  attachments: SendMessageAttachment[]
+}
+
 /** GET /api/articles/{id}/messages 消息项（assistant 失败消息附带 run JOIN 字段） */
 export interface Message {
   id: string
@@ -86,6 +103,7 @@ export interface Message {
   model: string
   created_at: string
   completed_at: string | null
+  attachments: MessageAttachment[]
   error_code?: string | null
   error_message?: string | null
   provider_detail?: string | null

@@ -248,6 +248,148 @@ async def test_failure_is_redacted_and_retry_reuses_user_message(api):
     assert workspace["current_version"]["title"] == "重试成功"
 
 
+async def test_attachments_are_persisted_hidden_from_api_and_reused_on_retry(api):
+    application, client, fake, _ = api
+    article = await create_article(client)
+    body = "# 访谈记录\n管理者需要清晰的沟通节奏"
+    fake.decisions.append(intent(UserIntent.GENERATE, "沟通"))
+    fake.responses.append(RuntimeError("temporary provider failure"))
+
+    response = await client.post(
+        f"/api/articles/{article['id']}/messages",
+        json={
+            "content": "根据附件写一篇文章",
+            "attachments": [{"name": "访谈.md", "content": body}],
+        },
+    )
+    assert response.status_code == 202, response.text
+    failed = response.json()
+    await collect_run(application, failed["run_id"])
+
+    workspace = (await client.get(f"/api/articles/{article['id']}/workspace")).json()
+    attachment = workspace["messages"][0]["attachments"][0]
+    assert attachment["name"] == "访谈.md"
+    assert attachment["size"] == len(body.encode("utf-8"))
+    assert attachment["media_type"] == "text/markdown"
+    assert "content" not in attachment
+    assert workspace["messages"][1]["attachments"] == []
+    stored = application.state.repository.get_message(
+        failed["user_message_id"], include_attachment_content=True
+    )
+    assert stored["attachments"][0]["content"] == body
+    assert "管理者需要清晰的沟通节奏" in "\n".join(
+        str(item.content) for item in fake.invocations[-1]
+    )
+    assert body not in "\n".join(
+        str(item.content) for item in fake.structured_invocations[-1]
+    )
+    assert "访谈.md" in "\n".join(
+        str(item.content) for item in fake.structured_invocations[-1]
+    )
+
+    fake.decisions.append(intent(UserIntent.GENERATE, "沟通"))
+    fake.responses.append("# 沟通节奏\n\n完整正文")
+    retried_response = await client.post(
+        f"/api/articles/{article['id']}/messages/{failed['user_message_id']}/retry"
+    )
+    assert retried_response.status_code == 202
+    await collect_run(application, retried_response.json()["run_id"])
+    after = (await client.get(f"/api/articles/{article['id']}/workspace")).json()
+    assert [item["role"] for item in after["messages"]] == [
+        "user",
+        "assistant",
+        "assistant",
+    ]
+    assert after["messages"][0]["attachments"] == workspace["messages"][0]["attachments"]
+    assert "管理者需要清晰的沟通节奏" in "\n".join(
+        str(item.content) for item in fake.invocations[-1]
+    )
+    checkpoint = await application.state.manager.agent.checkpoint_values(
+        thread_id=article["thread_id"]
+    )
+    assert checkpoint is not None
+    assert "管理者需要清晰的沟通节奏" not in str(checkpoint)
+
+
+@pytest.mark.parametrize(
+    ("attachments", "code"),
+    [
+        (
+            [{"name": f"{index}.txt", "content": "ok"} for index in range(6)],
+            "ARTICLE_ATTACHMENT_COUNT_INVALID",
+        ),
+        ([{"name": "../bad.txt", "content": "ok"}], "ARTICLE_ATTACHMENT_NAME_INVALID"),
+        ([{"name": "bad.pdf", "content": "ok"}], "ARTICLE_ATTACHMENT_TYPE_INVALID"),
+        ([{"name": "empty.txt", "content": ""}], "ARTICLE_ATTACHMENT_CONTENT_INVALID"),
+        (
+            [{"name": "large.txt", "content": "a" * (200 * 1024 + 1)}],
+            "ARTICLE_ATTACHMENT_SIZE_INVALID",
+        ),
+        (
+            [{"name": "chars.txt", "content": "a" * 120_001}],
+            "ARTICLE_ATTACHMENT_CONTENT_INVALID",
+        ),
+    ],
+)
+async def test_attachment_validation_is_atomic(api, attachments, code):
+    application, client, _, _ = api
+    article = await create_article(client)
+    response = await client.post(
+        f"/api/articles/{article['id']}/messages",
+        json={"content": "参考附件", "attachments": attachments},
+    )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == code
+    assert application.state.repository.workspace(article["id"])["messages"] == []
+
+
+async def test_five_attachments_and_boundaries_are_accepted(api):
+    application, client, fake, _ = api
+    article = await create_article(client)
+    fake.decisions.append(intent(UserIntent.UNRELATED_CHAT))
+    response = await client.post(
+        f"/api/articles/{article['id']}/messages",
+        json={
+            "content": "保存附件",
+            "attachments": [
+                {"name": f"notes-{index}.TXT", "content": "a" * 24_000}
+                for index in range(5)
+            ],
+        },
+    )
+    assert response.status_code == 202, response.text
+    await collect_run(application, response.json()["run_id"])
+    workspace = (await client.get(f"/api/articles/{article['id']}/workspace")).json()
+    assert len(workspace["messages"][0]["attachments"]) == 5
+    assert all(
+        item["media_type"] == "text/plain"
+        for item in workspace["messages"][0]["attachments"]
+    )
+
+
+async def test_current_attachment_context_overflow_has_specific_failure(api):
+    application, client, fake, _ = api
+    article = await create_article(client)
+    fake.decisions.append(intent(UserIntent.GENERATE, "超长资料"))
+    response = await client.post(
+        f"/api/articles/{article['id']}/messages",
+        json={
+            "content": "根据完整附件生成文章",
+            "attachments": [{"name": "long.txt", "content": "a" * 100_000}],
+        },
+    )
+    assert response.status_code == 202
+    events = await collect_run(application, response.json()["run_id"])
+    failure = next(event for event in events if event.type == "run.failed")
+    assert failure.data["message"] == (
+        "当前正文、最新指令、完整附件和生成预算已超过模型安全上下文；"
+        "请缩短文章或资料、缩小修改范围、拆分发送，或切换更大上下文模型。"
+    )
+    run = application.state.repository.get_run(response.json()["run_id"])
+    assert run["error_code"] == "ARTICLE_CONTEXT_TOO_LARGE"
+    assert fake.invocations == []
+
+
 async def test_message_cursor_pagination(api):
     application, client, fake, _ = api
     article = await create_article(client)

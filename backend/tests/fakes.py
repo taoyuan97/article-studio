@@ -16,6 +16,7 @@ class FakeStructuredModel:
         self.parent = parent
 
     async def ainvoke(self, messages: list[Any], config: dict[str, Any] | None = None):
+        self.parent.structured_invocations.append(messages)
         value = self.parent.decisions.pop(0)
         if isinstance(value, Exception):
             raise value
@@ -33,6 +34,7 @@ class FakeChatModel:
         self.decisions = list(decisions)
         self.responses = list(responses or [])
         self.invocations: list[list[Any]] = []
+        self.structured_invocations: list[list[Any]] = []
         self.chunk_delay = chunk_delay
 
     def with_structured_output(

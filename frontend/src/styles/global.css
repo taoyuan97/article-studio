@@ -397,6 +397,71 @@ body {
   flex: 1;
 }
 
+.attachment-input {
+  display: none;
+}
+
+.composer-attachments,
+.message-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.composer-attachment,
+.message-attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 4px 8px;
+  border: 1px solid rgba(47, 84, 235, 0.2);
+  border-radius: 999px;
+  background: rgba(47, 84, 235, 0.06);
+  color: rgba(5, 5, 5, 0.65);
+  font-size: 12px;
+}
+
+.composer-attachment-name,
+.message-attachment-name {
+  min-width: 0;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-attachment button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.composer-attachment button:hover:not(:disabled),
+.composer-attachment button:focus-visible {
+  background: rgba(47, 84, 235, 0.12);
+  outline: none;
+}
+
+.composer-attachment button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.message-attachments {
+  margin-top: 8px;
+}
+
 .article-heading-row {
   align-items: flex-start;
 }

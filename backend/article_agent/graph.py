@@ -7,6 +7,11 @@ from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemM
 from langgraph.graph import END, START, StateGraph
 
 from .budget import BudgetedContext, ContextBudgeter
+from .attachments import (
+    attachment_descriptors,
+    attachments_for_message,
+    render_current_attachments,
+)
 from .models import ArticleResult, IntentDecision, UserIntent
 from .prompts import (
     INTENT_SYSTEM_PROMPT,
@@ -34,6 +39,13 @@ def latest_user_text(state: ArticleAgentState) -> str:
     for message in reversed(state.get("messages", [])):
         if isinstance(message, HumanMessage) or getattr(message, "type", "") == "human":
             return message_text(message)
+    raise ValueError("No user message is available")
+
+
+def latest_user_message(state: ArticleAgentState) -> AnyMessage:
+    for message in reversed(state.get("messages", [])):
+        if isinstance(message, HumanMessage) or getattr(message, "type", "") == "human":
+            return message
     raise ValueError("No user message is available")
 
 
@@ -75,6 +87,13 @@ class GraphNodes:
     def config(self) -> dict[str, Any]:
         return {"callbacks": self.callbacks} if self.callbacks else {}
 
+    def invocation_config(self, state: ArticleAgentState) -> dict[str, Any]:
+        # Full reference text must not be copied into tracing callbacks. Runs
+        # without attachments retain the existing observability behavior.
+        if any(attachments_for_message(message) for message in state.get("messages", [])):
+            return {}
+        return self.config
+
     async def understand_input(self, state: ArticleAgentState) -> dict[str, Any]:
         # JSON mode is the stable intersection of DeepSeek and Moonshot's
         # OpenAI-compatible endpoints; Pydantic remains the validation boundary.
@@ -82,12 +101,16 @@ class GraphNodes:
             IntentDecision, method="json_mode"
         )
         latest = latest_user_text(state)
+        latest_attachments = attachments_for_message(latest_user_message(state))
         prompt = [
             SystemMessage(content=INTENT_SYSTEM_PROMPT),
             SystemMessage(
                 content=(
                     f"已有 Brief：{state['brief'].model_dump_json(exclude_none=True)}\n"
-                    f"已有正文：{'是' if state.get('current_content') else '否'}"
+                    f"已有正文：{'是' if state.get('current_content') else '否'}\n"
+                    f"附件描述：{attachment_descriptors(latest_attachments)}\n"
+                    "附件正文未提供给本阶段；当用户明确要求根据附件处理时，"
+                    "不要仅因 Brief 缺少附件中可能包含的信息而追问。"
                 )
             ),
             HumanMessage(content=latest),
@@ -132,14 +155,23 @@ class GraphNodes:
         }
 
     async def respond(self, state: ArticleAgentState) -> dict[str, Any]:
+        latest = latest_user_message(state)
+        context = await self.budgeter.build(
+            capabilities=self.registry.get_capabilities(
+                state["provider"], state["model"]
+            ),
+            system_prompt=RELATED_SYSTEM_PROMPT,
+            latest_instruction=message_text(latest),
+            latest_attachments=attachments_for_message(latest),
+            brief=state["brief"],
+            history=state.get("messages", []),
+            conversation_summary=state.get("conversation_summary"),
+            summary_until_message_id=state.get("summary_until_message_id"),
+            summarizer=lambda messages: self._summarize_history(state, list(messages)),
+        )
         response = message_text(
             await self.model(state).ainvoke(
-                [
-                    SystemMessage(content=RELATED_SYSTEM_PROMPT),
-                    SystemMessage(content=f"Brief：{state['brief'].model_dump_json(exclude_none=True)}"),
-                    HumanMessage(content=latest_user_text(state)),
-                ],
-                config=self.config,
+                context.messages, config=self.invocation_config(state)
             )
         )
         return {
@@ -174,15 +206,17 @@ class GraphNodes:
         batch: list[AnyMessage] = []
         batch_cost = estimator(summary)
         for message in messages:
-            cost = estimator(message_text(message))
+            text = message_text(message) + render_current_attachments(
+                attachments_for_message(message)
+            )
+            cost = estimator(text)
             if batch and batch_cost + cost > available:
                 batches.append(batch)
                 batch = []
                 batch_cost = estimator(summary)
             # An individual pathological message is conservatively tail-truncated.
             if cost > available:
-                text = message_text(message)
-                message = HumanMessage(content=text[-available * 2 :], id=message.id)
+                message = HumanMessage(content=text[: available * 2], id=message.id)
                 cost = estimator(message_text(message))
             batch.append(message)
             batch_cost += cost
@@ -190,7 +224,8 @@ class GraphNodes:
             batches.append(batch)
         for items in batches:
             transcript = "\n".join(
-                f"{getattr(item, 'type', 'message')}: {message_text(item)}"
+                f"{getattr(item, 'type', 'message')}: "
+                f"{message_text(item)}{render_current_attachments(attachments_for_message(item))}"
                 for item in items
             )
             response = await self.model(state).ainvoke(
@@ -198,17 +233,19 @@ class GraphNodes:
                     SystemMessage(content="压缩较早对话，保留写作决定、约束和未决事项。"),
                     HumanMessage(content=f"已有摘要：{summary}\n\n新增对话：\n{transcript}"),
                 ],
-                config=self.config,
+                config=self.invocation_config(state),
             )
             summary = message_text(response).strip()
         return summary
 
     async def _article_context(self, state: ArticleAgentState, revise: bool) -> BudgetedContext:
         capabilities = self.registry.get_capabilities(state["provider"], state["model"])
+        latest = latest_user_message(state)
         return await self.budgeter.build(
             capabilities=capabilities,
             system_prompt=REVISION_SYSTEM_PROMPT if revise else WRITING_SYSTEM_PROMPT,
-            latest_instruction=latest_user_text(state),
+            latest_instruction=message_text(latest),
+            latest_attachments=attachments_for_message(latest),
             brief=state["brief"],
             history=state.get("messages", []),
             current_content=state.get("current_content") if revise else None,
@@ -220,7 +257,9 @@ class GraphNodes:
     async def _write(self, state: ArticleAgentState, revise: bool) -> dict[str, Any]:
         context = await self._article_context(state, revise)
         response = message_text(
-            await self.model(state).ainvoke(context.messages, config=self.config)
+            await self.model(state).ainvoke(
+                context.messages, config=self.invocation_config(state)
+            )
         )
         title, markdown = split_article(response)
         result = ArticleResult(

@@ -12,13 +12,12 @@ interface MarkdownNode {
 function htmlToText(html: string): string {
   const withoutExecutableContent = html.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, '')
 
-  if (typeof document === 'undefined') {
+  if (typeof DOMParser === 'undefined') {
     return withoutExecutableContent.replace(/<[^>]*>/g, '')
   }
 
-  const template = document.createElement('template')
-  template.innerHTML = withoutExecutableContent
-  return template.content.textContent ?? ''
+  const parsed = new DOMParser().parseFromString(withoutExecutableContent, 'text/html')
+  return parsed.body.textContent ?? ''
 }
 
 function renderInline(node: MarkdownNode): string {
