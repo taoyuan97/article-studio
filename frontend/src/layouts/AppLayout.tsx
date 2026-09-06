@@ -25,7 +25,7 @@ export default function AppLayout() {
       <Layout.Sider className="app-layout-sider" theme="light" width={220}>
         <div className="app-brand">
           <span className="app-brand-eyebrow">ARTICLE STUDIO</span>
-          <h2 className="app-brand-title">工作台</h2>
+          <h2 className="app-brand-title">文章工作台</h2>
         </div>
         <nav className="app-nav" aria-label="主导航">
           <ul>
