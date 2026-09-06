@@ -3,7 +3,7 @@
  * 未识别的错误码透传后端 message。
  */
 const PUBLISH_ERROR_TEXTS: Record<string, string> = {
-  PUBLISH_CREDENTIALS_MISSING: '未配置公众号凭据：请在 backend/.env 中设置 WECHAT_APP_ID 与 WECHAT_APP_SECRET 后重启后端。',
+  PUBLISH_CREDENTIALS_MISSING: '未配置公众号凭据：请到“设置 > 公众号配置”填写 AppID 与 AppSecret。',
   PUBLISH_MCP_NOT_INSTALLED: '未找到 wenyan-mcp：请先执行 npm install -g @wenyan-md/mcp 安装。',
   PUBLISH_TIMEOUT: '发布超时（120s）：请稍后在发布记录中查看结果，或重试。',
   PUBLISH_MCP_ERROR:

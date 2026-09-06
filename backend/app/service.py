@@ -52,10 +52,12 @@ class RunManager:
         agent: ArticleAgent,
         *,
         secret_values: list[str] | None = None,
+        configuration_lock: asyncio.Lock | None = None,
     ) -> None:
         self.repository = repository
         self.agent = agent
         self.secret_values = secret_values or []
+        self.configuration_lock = configuration_lock or asyncio.Lock()
         self._runs: dict[str, RunContext] = {}
         self._active_by_article: dict[str, str] = {}
         self._lock = asyncio.Lock()
@@ -66,6 +68,15 @@ class RunManager:
     def active_run_id(self, article_id: str) -> str | None:
         return self._active_by_article.get(article_id)
 
+    def has_active_runs(self) -> bool:
+        return bool(self._active_by_article)
+
+    def reconfigure(self, agent: ArticleAgent, secret_values: list[str]) -> None:
+        if self.has_active_runs():
+            raise RunNotActiveError("SETTINGS_RUN_ACTIVE")
+        self.agent = agent
+        self.secret_values = secret_values
+
     async def start(
         self,
         article_id: str,
@@ -74,21 +85,22 @@ class RunManager:
         attachments: list[dict[str, Any]] | None = None,
         retry_message_id: str | None = None,
     ) -> dict[str, Any]:
-        async with self._lock:
-            if article_id in self._active_by_article:
-                raise RunNotActiveError("ARTICLE_RUN_ACTIVE")
-            run = self.repository.create_run(
-                article_id,
-                content=content,
-                attachments=attachments,
-                retry_message_id=retry_message_id,
-            )
-            context = RunContext(run["id"], article_id)
-            self._runs[run["id"]] = context
-            self._active_by_article[article_id] = run["id"]
-            context.task = asyncio.create_task(
-                self._execute(context), name=f"article-run-{run['id']}"
-            )
+        async with self.configuration_lock:
+            async with self._lock:
+                if article_id in self._active_by_article:
+                    raise RunNotActiveError("ARTICLE_RUN_ACTIVE")
+                run = self.repository.create_run(
+                    article_id,
+                    content=content,
+                    attachments=attachments,
+                    retry_message_id=retry_message_id,
+                )
+                context = RunContext(run["id"], article_id)
+                self._runs[run["id"]] = context
+                self._active_by_article[article_id] = run["id"]
+                context.task = asyncio.create_task(
+                    self._execute(context), name=f"article-run-{run['id']}"
+                )
         return run
 
     async def _build_state(

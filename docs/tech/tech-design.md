@@ -2,10 +2,10 @@
 
 ## 1. 文档信息
 
-- 版本：v1.3
-- 状态：已实施（T001–T010 全部完成；v1.1 补记 T007–T010 公众号发布线设计；v1.2 补记 T012–T013 发布向导交互演进——封面/作者前置、正文画布块级锚点插图与 `after_block_{i}` 位置契约；v1.3 补记 T015 配图计划线——`image_plans` 表、三个计划接口与 LLM 结构化编排链路、计划/行动双模式前端）
+- 版本：v1.4
+- 状态：已实施（T001–T017；v1.4 新增 T018 设置页、运行时配置覆盖、模型热更新和公众号配置）
 - 创建日期：2026-08-23
-- 关联文档：`docs/prd/prd.md`（产品需求）、`docs/task/`（任务拆分：T001–T015）
+- 关联文档：`docs/prd/prd.md`（产品需求）、`docs/task/`（任务拆分：T001–T018）
 - 迁移源：`prototype/article-agent-mvp/backend`（契约基准：`backend/tests/test_frontend_contract.py`）
 
 ## 2. 总体架构
@@ -245,6 +245,7 @@ run 响应结构（两条线同构）：
 - `data/checkpoints.sqlite3`：LangGraph AsyncSqliteSaver。
 - `data/assets/`：图片文件。
 - `data/publish_tmp/`：发布组装 Markdown 临时文件（发布结束即删，快照持久化于 publish_records）。
+- `data/settings.json`：T018 页面配置对 `.env` 的字段级覆盖，含 revision 与敏感凭据；原子写入、随 `data/` 忽略，仅限可信本机读取。
 - 目录由 `DATA_DIR` 配置；正式项目数据从零开始。
 
 ### 5.5 环境配置
@@ -258,8 +259,27 @@ SERVE_FRONTEND=true   # 生产模式托管 frontend/dist；开发模式置 false
 WECHAT_APP_ID=            # 个人订阅号 AppID（mp.weixin.qq.com 基本配置）
 WECHAT_APP_SECRET=        # AppSecret；需将本机公网 IP 加入白名单
 WENYAN_MCP_COMMAND=wenyan-mcp   # 发布子进程命令（stdio MCP，按需拉起）
-PUBLISH_FAKE_MODE=false   # true 时不启动子进程、不外呼（开发/测试默认 true）
+PUBLISH_FAKE_MODE=false   # true 时不启动子进程、不外呼；代码默认 false
 ```
+
+T018 起，`.env` 作为只读基线；设置页写入 `DATA_DIR/settings.json`。模型/default/runtime 更新在无 active run 时原子重建 `ModelRegistry`、`ArticleAgent` 与 `ImageProviderRegistry`，公众号凭据更新重建 `WenyanMcpClient`。`.env` 凭据只返回掩码，只有页面保存的覆盖值可通过受同源保护的 reveal 接口查看。
+
+设置 API：
+
+```text
+GET    /api/settings/status
+PATCH  /api/settings/providers/{provider}
+DELETE /api/settings/providers/{provider}/credentials
+POST   /api/settings/providers/{provider}/credentials/reveal
+PATCH  /api/settings/defaults
+PATCH  /api/settings/runtime
+PATCH  /api/settings/wechat
+DELETE /api/settings/wechat/credentials
+POST   /api/settings/wechat/credentials/reveal
+POST   /api/settings/probe/{provider}
+```
+
+可编辑 provider 为 `llm_deepseek`、`llm_moonshot`、`image_wanxiang`；`image_dreamina` 仅返回只读占位状态。所有设置响应 `Cache-Control: no-store`，mutation/reveal/probe 执行本机同源校验，revision 冲突返回 `SETTINGS_REVISION_CONFLICT`，生成运行中更新模型配置返回 `SETTINGS_RUN_ACTIVE`。
 
 ### 5.6 发布线设计（T007–T014）
 

@@ -12,11 +12,17 @@ function renderAt(path: string) {
 }
 
 describe('AppLayout 侧边栏', () => {
-  it('渲染第 4 项「发布记录」，位于「素材」之后', () => {
+  it('渲染「发布记录」与末尾的「设置」', () => {
     renderAt('/articles')
     const items = screen.getAllByRole('link')
     const labels = items.map((item) => item.textContent)
-    expect(labels).toEqual(['首页', '文章', '素材', '发布记录'])
+    expect(labels).toEqual(['首页', '文章', '素材', '发布记录', '设置'])
+  })
+
+  it('/settings 路径下「设置」高亮', () => {
+    renderAt('/settings')
+    expect(screen.getByRole('link', { name: '设置' })).toHaveAttribute('aria-current', 'page')
+    expect(screen.getByRole('link', { name: '发布记录' })).toHaveAttribute('aria-current', 'false')
   })
 
   it('/publish-records 路径下「发布记录」高亮（aria-current=page）', () => {

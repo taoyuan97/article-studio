@@ -6,10 +6,11 @@ const NAV_ITEMS = [
   { key: '/articles', label: '文章' },
   { key: '/assets', label: '素材' },
   { key: '/publish-records', label: '发布记录' },
+  { key: '/settings', label: '设置' },
 ] as const
 
 /**
- * 带侧边导航的应用壳（首页 / 文章列表 / 素材库 / 发布记录）。
+ * 带侧边导航的应用壳（首页 / 文章列表 / 素材库 / 发布记录 / 设置）。
  *
  * 当前项通过 aria-current="page" 标记；/publish-records/:recordId 深链同样
  * 命中「发布记录」高亮（前缀匹配）。语义化 <nav>/<ul>/<a> 结构。

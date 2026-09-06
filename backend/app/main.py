@@ -45,6 +45,8 @@ from .publish_service import (
     split_sections,
 )
 from .service import RunManager
+from .settings import router as settings_router
+from .settings_store import SettingsStore
 from .wenyan_client import PublishError, WenyanMcpClient
 
 
@@ -189,11 +191,15 @@ def create_app(
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(application: FastAPI):
-        resolved_settings = settings or Settings()
-        resolved_registry = registry or ModelRegistry.from_settings(resolved_settings)
-        resolved_data_dir = Path(data_dir or resolved_settings.data_dir).resolve()
+        base_settings = settings or Settings()
+        resolved_data_dir = Path(data_dir or base_settings.data_dir).resolve()
         resolved_data_dir.mkdir(parents=True, exist_ok=True)
         _setup_logging(resolved_data_dir)
+        settings_store = SettingsStore(
+            base_settings, resolved_data_dir / "settings.json"
+        )
+        resolved_settings = settings_store.current
+        resolved_registry = registry or ModelRegistry.from_settings(resolved_settings)
         repository = Repository(resolved_data_dir / "article.sqlite3")
         repository.initialize()
         repository.recover_stale_runs()
@@ -203,6 +209,7 @@ def create_app(
         )
         checkpointer = AsyncSqliteSaver(checkpoint_connection)
         await checkpointer.setup()
+        configuration_lock = asyncio.Lock()
         agent = ArticleAgent(
             resolved_registry,
             usage_ratio=resolved_settings.llm_context_usage_ratio,
@@ -227,14 +234,34 @@ def create_app(
             )
             if value
         ]
-        manager = RunManager(repository, agent, secret_values=secrets)
+        wechat_secrets = [
+            value
+            for value in (
+                resolved_settings.wechat_app_id,
+                resolved_settings.wechat_app_secret,
+            )
+            if value
+        ]
+        all_secrets = secrets + image_secrets + wechat_secrets
+        manager = RunManager(
+            repository,
+            agent,
+            secret_values=all_secrets,
+            configuration_lock=configuration_lock,
+        )
         resolved_image_registry = image_registry_override or ImageProviderRegistry.from_settings(
             resolved_settings, data_dir=resolved_data_dir
         )
         image_manager = ImageRunManager(
-            repository, resolved_image_registry, secret_values=secrets + image_secrets
+            repository,
+            resolved_image_registry,
+            secret_values=all_secrets,
+            configuration_lock=configuration_lock,
         )
         application.state.settings = resolved_settings
+        application.state.settings_store = settings_store
+        application.state.configuration_lock = configuration_lock
+        application.state.checkpointer = checkpointer
         application.state.registry = resolved_registry
         application.state.image_registry = resolved_image_registry
         application.state.repository = repository
@@ -244,7 +271,7 @@ def create_app(
             resolved_settings, data_dir=resolved_data_dir
         )
         application.state.data_dir = resolved_data_dir
-        application.state.secret_values = secrets + image_secrets
+        application.state.secret_values = all_secrets
         (resolved_data_dir / "assets").mkdir(parents=True, exist_ok=True)
         application.mount(
             "/static/assets",
@@ -277,7 +304,7 @@ def create_app(
         CORSMiddleware,
         allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
         allow_credentials=False,
-        allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
+        allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Content-Type"],
     )
 
@@ -294,7 +321,11 @@ def create_app(
     async def handle_run_conflict(_request: Request, exc: RunNotActiveError):
         from fastapi.responses import JSONResponse
 
-        code = "ARTICLE_RUN_ACTIVE" if str(exc) == "ARTICLE_RUN_ACTIVE" else "RUN_NOT_ACTIVE"
+        code = (
+            str(exc)
+            if str(exc) in {"ARTICLE_RUN_ACTIVE", "SETTINGS_RUN_ACTIVE"}
+            else "RUN_NOT_ACTIVE"
+        )
         return JSONResponse(
             status_code=409,
             content={"error": {"code": code, "message": str(exc)}},
@@ -357,6 +388,8 @@ def create_app(
             )
         return await http_exception_handler(request, exc)
 
+    application.include_router(settings_router)
+
     def repository(request: Request) -> Repository:
         return request.app.state.repository
 
@@ -380,11 +413,11 @@ def create_app(
             item["provider"] for item in request.app.state.registry.list_models()
         }
         required = {
-            "deepseek": "DEEPSEEK_API_KEY、DEEPSEEK_MODEL、DEEPSEEK_CONTEXT_WINDOW",
-            "moonshot": "MOONSHOT_API_KEY、MOONSHOT_MODEL、MOONSHOT_CONTEXT_WINDOW",
+            "deepseek": "DeepSeek API Key、模型 ID、Context Window",
+            "moonshot": "Kimi API Key、模型 ID、Context Window",
         }
         return [
-            {"provider": provider, "reason": f"需要配置 {variables}"}
+            {"provider": provider, "reason": f"请到设置页配置 {variables}"}
             for provider, variables in required.items()
             if provider not in configured
         ]
@@ -535,7 +568,7 @@ def create_app(
         if not providers:
             raise _error(
                 "IMAGE_PROVIDER_NOT_CONFIGURED",
-                "未配置可用的生图模型，请检查环境变量。",
+                "未配置可用的生图模型，请到设置页完成配置。",
                 422,
             )
         provider = settings_value.default_image_provider

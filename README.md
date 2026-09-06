@@ -15,6 +15,7 @@ AI 驱动的文章创作与配图工作台：通过对话生成与修订长文�
 | 配图工作台   | 提示词生图（通义万相 / 即梦）、生成进度实时展示、档位与比例参数持久化、取消、保存素材；「计划」模式一键编排文章配图提示词方案（位置/排版/风格，逐条复制） |
 | 素材库       | 图片素材列表、详情查看、回链来源配图会话                                                                                                                  |
 | 发布到公众号 | 三步向导（选文章/版本 → 正文画布锚点定位插图 → 选主题即渲染预览、可编辑）一键推送至个人公众号草稿箱（仅建草稿不群发），发布记录与内容快照可回看           |
+| 设置         | 页面配置 DeepSeek、Kimi、通义万相及微信公众号凭据，支持默认模型、运行参数、凭据回退和连通测试；即梦入口暂为占位                                     |
 
 ## 环境要求
 
@@ -39,13 +40,15 @@ copy backend\.env.example backend\.env
 #   MOONSHOT_API_KEY=sk-...        （文章线，可选第二供应商）
 #   ALIYUN_WANXIANG_API_KEY=...    （配图线，可选）
 #   DREAMINA_API_KEY=...           （配图线，可选）
-#   WECHAT_APP_ID / WECHAT_APP_SECRET   （发布线，可选；PUBLISH_FAKE_MODE 默认 true 假发布）
+#   WECHAT_APP_ID / WECHAT_APP_SECRET   （发布线，可选；PUBLISH_FAKE_MODE 默认 false，真实发布）
 #   WENYAN_MCP_COMMAND=wenyan-mcp       （发布线，需 npm install -g @wenyan-md/mcp）
 ```
 
-发布线真实配置（IP 白名单、AppSecret 获取、wenyan-mcp 安装）见 `docs/ops/manual-tasks-t007-t010.md`；不配置时 `PUBLISH_FAKE_MODE=true` 走假发布，不外呼微信接口。
+发布线真实配置（IP 白名单、AppSecret 获取、wenyan-mcp 安装）见 `docs/ops/manual-tasks-t007-t010.md`。`PUBLISH_FAKE_MODE` 默认 `false`；如只想体验流程而不请求微信接口，需显式设为 `true`。
 
 其余配置项（模型 ID、超时、上下文预算等）保持默认即可。
+
+启动后也可从侧边栏进入“设置”修改模型与公众号配置。页面配置作为 `.env` 的字段级覆盖保存到 `DATA_DIR/settings.json`，重启后仍生效；该文件含明文敏感凭据，已随 `data/` 忽略，请只在可信本机环境使用。
 
 ### 2. 启动服务
 

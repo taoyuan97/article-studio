@@ -73,10 +73,12 @@ class ImageRunManager:
         registry: ImageProviderRegistry,
         *,
         secret_values: list[str] | None = None,
+        configuration_lock: asyncio.Lock | None = None,
     ) -> None:
         self.repository = repository
         self.registry = registry
         self.secret_values = secret_values or []
+        self.configuration_lock = configuration_lock or asyncio.Lock()
         self._runs: dict[str, ImageRunContext] = {}
         self._active_by_session: dict[str, str] = {}
         self._lock = asyncio.Lock()
@@ -86,6 +88,17 @@ class ImageRunManager:
 
     def active_run_id(self, session_id: str) -> str | None:
         return self._active_by_session.get(session_id)
+
+    def has_active_runs(self) -> bool:
+        return bool(self._active_by_session)
+
+    def reconfigure(
+        self, registry: ImageProviderRegistry, secret_values: list[str]
+    ) -> None:
+        if self.has_active_runs():
+            raise RunNotActiveError("SETTINGS_RUN_ACTIVE")
+        self.registry = registry
+        self.secret_values = secret_values
 
     async def start(
         self,
@@ -97,27 +110,28 @@ class ImageRunManager:
         tier: str | None = None,
         ratio: str | None = None,
     ) -> dict[str, Any]:
-        async with self._lock:
-            if session_id in self._active_by_session:
-                raise RunNotActiveError("IMAGE_RUN_ACTIVE")
-            resolved_tier = tier or "2K"
-            resolved_ratio = ratio or "1:1"
-            size = resolve_image_size(provider, resolved_tier, resolved_ratio)
-            run = self.repository.create_image_run(
-                session_id,
-                content=content,
-                provider=provider,
-                model=model,
-                size=size,
-                tier=resolved_tier,
-                ratio=resolved_ratio,
-            )
-            context = ImageRunContext(run["id"], session_id)
-            self._runs[run["id"]] = context
-            self._active_by_session[session_id] = run["id"]
-            context.task = asyncio.create_task(
-                self._execute(context), name=f"image-run-{run['id']}"
-            )
+        async with self.configuration_lock:
+            async with self._lock:
+                if session_id in self._active_by_session:
+                    raise RunNotActiveError("IMAGE_RUN_ACTIVE")
+                resolved_tier = tier or "2K"
+                resolved_ratio = ratio or "1:1"
+                size = resolve_image_size(provider, resolved_tier, resolved_ratio)
+                run = self.repository.create_image_run(
+                    session_id,
+                    content=content,
+                    provider=provider,
+                    model=model,
+                    size=size,
+                    tier=resolved_tier,
+                    ratio=resolved_ratio,
+                )
+                context = ImageRunContext(run["id"], session_id)
+                self._runs[run["id"]] = context
+                self._active_by_session[session_id] = run["id"]
+                context.task = asyncio.create_task(
+                    self._execute(context), name=f"image-run-{run['id']}"
+                )
         return run
 
     async def _execute(self, context: ImageRunContext) -> None:

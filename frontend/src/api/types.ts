@@ -441,3 +441,64 @@ export interface Stats {
   recent_articles: RecentArticle[]
   recent_assets: RecentAsset[]
 }
+
+// ---------- 设置 ----------
+
+export type SettingsProviderId =
+  | 'llm_deepseek'
+  | 'llm_moonshot'
+  | 'image_wanxiang'
+  | 'image_dreamina'
+
+export interface SettingsProviderStatus {
+  configured: boolean
+  editable: boolean
+  credential_masked: string | null
+  credential_source: 'runtime' | 'env' | 'mixed' | null
+  runtime_credential_fields: string[]
+  base_url?: string
+  model_id?: string | null
+  context_window?: number | null
+  unavailable_reason?: string
+}
+
+export interface SettingsRuntime {
+  llm_timeout_seconds: number
+  llm_max_retries: number
+  llm_max_output_tokens: number
+  llm_context_usage_ratio: number
+  llm_recent_message_limit: number
+  image_timeout_seconds: number
+}
+
+export interface WechatSettingsStatus {
+  configured: boolean
+  credential_masked: string | null
+  credential_source: 'runtime' | 'env' | 'mixed' | null
+  runtime_credential_fields: Array<'app_id' | 'app_secret'>
+  mcp_command_configured: boolean
+  mcp_available: boolean
+  mcp_executable: string | null
+  publish_fake_mode: boolean
+}
+
+export interface SettingsStatus {
+  revision: number
+  default_llm_provider: 'deepseek' | 'moonshot'
+  default_image_provider: 'aliyun_wanxiang' | 'dreamina' | null
+  providers: Record<SettingsProviderId, SettingsProviderStatus>
+  runtime: SettingsRuntime
+  wechat: WechatSettingsStatus
+}
+
+export interface CredentialRevealResponse {
+  revision: number
+  field: string
+  value: string
+}
+
+export interface ProbeResult {
+  ok: boolean
+  latency_ms: number
+  message: string
+}

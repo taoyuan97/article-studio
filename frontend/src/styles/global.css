@@ -1703,3 +1703,85 @@ body {
   max-width: 320px;
   border-radius: 6px;
 }
+
+/* ---------- 设置 ---------- */
+
+.settings-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.settings-subtitle {
+  margin: 0;
+  color: rgba(5, 5, 5, 0.55);
+}
+
+.settings-tab-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.settings-provider-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.settings-provider-card {
+  min-width: 0;
+}
+
+.settings-provider-placeholder {
+  background: rgba(5, 5, 5, 0.02);
+}
+
+.settings-provider-placeholder p {
+  margin: 0;
+  color: rgba(5, 5, 5, 0.55);
+}
+
+.settings-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+  color: rgba(5, 5, 5, 0.65);
+  font-size: 13px;
+}
+
+.settings-form-grid,
+.settings-runtime-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 16px;
+}
+
+.settings-runtime-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.settings-readonly-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(5, 5, 5, 0.06);
+}
+
+.settings-readonly-grid > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+@media (max-width: 960px) {
+  .settings-provider-grid,
+  .settings-runtime-grid {
+    grid-template-columns: 1fr;
+  }
+}

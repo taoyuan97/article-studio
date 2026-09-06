@@ -9,10 +9,11 @@ import ImageWorkspacePage from './pages/ImageWorkspacePage'
 import PublishPage from './pages/PublishPage'
 import PublishRecordsPage from './pages/PublishRecordsPage'
 import PublishRecordDetailPage from './pages/PublishRecordDetailPage'
+import SettingsPage from './pages/SettingsPage'
 
 /**
- * 路由表（8 条）：
- * - 带壳（AppLayout）：/ 首页、/articles 文章列表、/assets 素材库、/publish-records 发布记录；
+ * 路由表（9 条）：
+ * - 带壳（AppLayout）：/ 首页、/articles 文章列表、/assets 素材库、/publish-records 发布记录、/settings 设置；
  * - 专注模式（FocusLayout）：/articles/:articleId 文章工作台（返回文章列表）、
  *   /image-sessions/:sessionId 配图工作台（返回素材列表）、
  *   /publish 发布向导（返回文章列表）、/publish-records/:recordId 快照详情（返回发布记录）。
@@ -25,6 +26,7 @@ export default function App() {
         <Route path="/articles" element={<ArticleListPage />} />
         <Route path="/assets" element={<AssetLibraryPage />} />
         <Route path="/publish-records" element={<PublishRecordsPage />} />
+        <Route path="/settings" element={<SettingsPage />} />
       </Route>
       <Route element={<FocusLayout backTo="/articles" backLabel="返回文章列表" />}>
         <Route path="/articles/:articleId" element={<ArticleWorkspacePage />} />

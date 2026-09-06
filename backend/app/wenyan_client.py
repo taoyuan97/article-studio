@@ -86,7 +86,7 @@ class WenyanMcpClient:
         if not self._settings.wechat_app_id or not self._settings.wechat_app_secret:
             raise PublishError(
                 "PUBLISH_CREDENTIALS_MISSING",
-                "未配置公众号凭据，请在 .env 中设置 WECHAT_APP_ID 与 WECHAT_APP_SECRET。",
+                "未配置公众号凭据，请到“设置 > 公众号配置”填写 AppID 与 AppSecret。",
             )
 
     def _server_command(self) -> tuple[str, list[str]]:
