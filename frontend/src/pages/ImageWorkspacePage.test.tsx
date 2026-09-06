@@ -5,6 +5,7 @@ import { App as AntApp } from 'antd'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client'
+import { FakeEventSource } from '../test/fakeEventSource'
 
 const getImageWorkspace = vi.fn()
 const sendImagePrompt = vi.fn()
@@ -147,6 +148,8 @@ async function waitForForm() {
 describe('ImageWorkspacePage 计划/行动双模式', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    FakeEventSource.reset()
+    vi.stubGlobal('EventSource', FakeEventSource)
     window.localStorage.clear()
     getImageWorkspace.mockResolvedValue(makeWorkspace())
     getDefaults.mockResolvedValue(DEFAULTS)
@@ -290,5 +293,60 @@ describe('ImageWorkspacePage 计划/行动双模式', () => {
     await user.click(screen.getByText('行动'))
     await screen.findByText('历史对话')
     expect(window.localStorage.getItem(`image-mode:${SESSION_ID}`)).toBe('action')
+  })
+
+  it('行动模式可查看已有方案，并将提示词及建议比例带入生图输入区', async () => {
+    getLatest.mockResolvedValue(PLAN_RESPONSE)
+    const user = userEvent.setup()
+    renderPage()
+
+    await screen.findByLabelText('结果视图')
+    await user.click(screen.getByText('配图方案'))
+    await screen.findByText('提示词一：清晨咖啡馆')
+
+    await user.click(screen.getByRole('button', { name: '使用提示词 1 生图' }))
+
+    expect(screen.getByPlaceholderText(/描述你想要的画面/)).toHaveValue('提示词一：清晨咖啡馆')
+    expect(screen.getByRole('button', { name: '图片参数：2K · 16:9' })).toBeInTheDocument()
+    expect(screen.getByText('提示词二：暮色天际线')).toBeInTheDocument()
+  })
+
+  it('使用方案时确认覆盖已有草稿；发送后默认看当前图片且生成中仍可切回方案', async () => {
+    getLatest.mockResolvedValue(PLAN_RESPONSE)
+    sendImagePrompt.mockResolvedValue({
+      run_id: 'image-run-1',
+      session_id: SESSION_ID,
+      user_message_id: 'message-1',
+      status: 'running',
+      events_url: '/api/image-runs/image-run-1/events',
+    })
+    const user = userEvent.setup()
+    renderPage()
+
+    await screen.findByLabelText('结果视图')
+    const input = screen.getByPlaceholderText(/描述你想要的画面/)
+    await user.type(input, '尚未发送的草稿')
+    await user.click(screen.getByText('配图方案'))
+    await user.click(screen.getByRole('button', { name: '使用提示词 2 生图' }))
+
+    expect((await screen.findAllByText('覆盖当前提示词？')).length).toBeGreaterThan(0)
+    expect(input).toHaveValue('尚未发送的草稿')
+    await user.click(screen.getByRole('button', { name: /覆\s*盖/ }))
+    await waitFor(() => expect(input).toHaveValue('提示词二：暮色天际线'))
+    expect(screen.getByRole('button', { name: '图片参数：2K · 9:16' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /发\s*送/ }))
+    await waitFor(() => expect(sendImagePrompt).toHaveBeenCalledWith(
+      SESSION_ID,
+      '提示词二：暮色天际线',
+      'fake',
+      'fake-image-model',
+      '2K',
+      '9:16',
+    ))
+    expect(await screen.findByText('生成中……')).toBeInTheDocument()
+
+    await user.click(screen.getByText('配图方案'))
+    expect(screen.getByText('提示词二：暮色天际线')).toBeInTheDocument()
   })
 })

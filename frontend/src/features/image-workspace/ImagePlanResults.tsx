@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react'
 import { Button, Spin } from 'antd'
 import type { ApiError } from '../../api/client'
-import type { ImagePlanResponse } from '../../api/types'
+import type { ImagePlanImage, ImagePlanResponse } from '../../api/types'
 import StatusBanner from '../../components/StatusBanner'
 
 const LAYOUT_LABELS: Record<string, string> = {
@@ -33,13 +33,23 @@ export interface ImagePlanResultsProps {
   pending: boolean
   error: ApiError | null
   onRetry: () => void
+  /** 将某条方案带入行动模式的生图输入区 */
+  onUsePrompt?: (image: ImagePlanImage) => void
+  usePromptDisabled?: boolean
 }
 
 /**
  * 计划模式结果面板：统计条（字数/章节/情绪基调/风格）+ 配图卡片
  * （位置说明 / 排版建议 / 提示词 + 复制按钮）。
  */
-export default function ImagePlanResults({ data, pending, error, onRetry }: ImagePlanResultsProps) {
+export default function ImagePlanResults({
+  data,
+  pending,
+  error,
+  onRetry,
+  onUsePrompt,
+  usePromptDisabled = false,
+}: ImagePlanResultsProps) {
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -107,13 +117,26 @@ export default function ImagePlanResults({ data, pending, error, onRetry }: Imag
             <pre className="image-plan-prompt">{image.prompt}</pre>
             <footer className="image-plan-card-footer">
               <span className="image-plan-layout-reason">{image.layout_reason}</span>
-              <Button
-                size="small"
-                onClick={() => handleCopy(index, image.prompt)}
-                aria-label={`复制提示词 ${index + 1}`}
-              >
-                {copiedIndex === index ? '已复制' : '复制'}
-              </Button>
+              <div className="image-plan-card-actions">
+                <Button
+                  size="small"
+                  onClick={() => handleCopy(index, image.prompt)}
+                  aria-label={`复制提示词 ${index + 1}`}
+                >
+                  {copiedIndex === index ? '已复制' : '复制'}
+                </Button>
+                {onUsePrompt && (
+                  <Button
+                    size="small"
+                    type="primary"
+                    disabled={usePromptDisabled}
+                    onClick={() => onUsePrompt(image)}
+                    aria-label={`使用提示词 ${index + 1} 生图`}
+                  >
+                    用于生图
+                  </Button>
+                )}
+              </div>
             </footer>
           </article>
         ))}

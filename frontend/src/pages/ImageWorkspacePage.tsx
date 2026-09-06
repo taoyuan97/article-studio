@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router-dom'
 import { App, Button, Input, Modal, Progress, Segmented, Select, Spin } from 'antd'
@@ -6,7 +6,12 @@ import { assetsApi } from '../api/assets'
 import type { ApiError } from '../api/client'
 import { imagePlanApi } from '../api/imagePlan'
 import { imageSessionsApi } from '../api/imageSessions'
-import type { ImagePlanGenerateRequest, ImagePlanResponse, ImageWorkspace } from '../api/types'
+import type {
+  ImagePlanGenerateRequest,
+  ImagePlanImage,
+  ImagePlanResponse,
+  ImageWorkspace,
+} from '../api/types'
 import StatusBanner from '../components/StatusBanner'
 import ImageMessageList, { type ImageFailureInfo } from '../features/image-workspace/ImageMessageList'
 import ImageParamsPopover from '../features/image-workspace/ImageParamsPopover'
@@ -36,7 +41,7 @@ import type { ImageRunEventType, RunEventData } from '../lib/sse'
 export default function ImageWorkspacePage() {
   const { sessionId } = useParams<{ sessionId: string }>()
   const queryClient = useQueryClient()
-  const { message } = App.useApp()
+  const { message, modal } = App.useApp()
 
   const workspaceQuery = useQuery({
     queryKey: ['image-workspace', sessionId],
@@ -55,6 +60,7 @@ export default function ImageWorkspacePage() {
   const [failure, setFailure] = useState<ImageFailureInfo | null>(null)
   const [selectedImageId, setSelectedImageId] = useState<string | null>(null)
   const [inputValue, setInputValue] = useState('')
+  const inputValueRef = useRef('')
 
   // 重新进入时自动恢复运行中的事件流
   const runId = activeRunId ?? workspace?.active_run_id ?? null
@@ -90,11 +96,11 @@ export default function ImageWorkspacePage() {
     sessionId ? loadSessionMode(sessionId) : 'action',
   )
 
-  // ---------- 计划模式：最近方案恢复 + 一键编排 ----------
+  // ---------- 配图方案：进入会话即恢复，供计划模式和行动模式右栏共用 ----------
   const latestPlanQuery = useQuery({
     queryKey: ['image-plan-latest', sessionId],
     queryFn: () => imagePlanApi.getLatest(sessionId!),
-    enabled: mode === 'plan' && Boolean(sessionId),
+    enabled: Boolean(sessionId),
     staleTime: Infinity,
     retry: false,
   })
@@ -111,6 +117,8 @@ export default function ImageWorkspacePage() {
   })
 
   const planData = generatedPlan ?? latestPlanQuery.data ?? null
+  const hasPlan = Boolean(planData?.plan)
+  const [resultView, setResultView] = useState<'image' | 'plan'>('image')
   const modeDisabled = running || planMutation.isPending
   const statusRunning = running || (mode === 'plan' && planMutation.isPending)
 
@@ -208,6 +216,7 @@ export default function ImageWorkspacePage() {
       setProgress(0)
       setFailure(null)
       setInputValue('')
+      inputValueRef.current = ''
       saveSessionParams(sessionId!, { tier: params.tier, ratio: params.ratio })
       invalidateWorkspace()
     },
@@ -221,6 +230,7 @@ export default function ImageWorkspacePage() {
   const handleSend = useCallback(() => {
     const content = inputValue.trim()
     if (!content || running || !sessionId || !effectiveProvider) return
+    setResultView('image')
     sendMutation.mutate({
       content,
       provider: effectiveProvider.provider,
@@ -229,6 +239,38 @@ export default function ImageWorkspacePage() {
       ratio: params.ratio,
     })
   }, [effectiveProvider, inputValue, params, running, sendMutation, sessionId])
+
+  const handleUsePlanPrompt = useCallback(
+    (image: ImagePlanImage) => {
+      const applyPrompt = () => {
+        const ratioByLayout = {
+          landscape: '16:9',
+          square: '1:1',
+          portrait: '9:16',
+        } as const
+        setInputValue(image.prompt)
+        inputValueRef.current = image.prompt
+        setRawParams((prev) => ({ ...prev, ratio: ratioByLayout[image.layout] }))
+        setMode('action')
+        setResultView('plan')
+        if (sessionId) saveSessionMode(sessionId, 'action')
+      }
+
+      const draft = inputValueRef.current.trim()
+      if (draft && draft !== image.prompt.trim()) {
+        modal.confirm({
+          title: '覆盖当前提示词？',
+          content: '输入框中有尚未发送的内容，使用此方案将覆盖现有内容。',
+          okText: '覆盖',
+          cancelText: '取消',
+          onOk: applyPrompt,
+        })
+        return
+      }
+      applyPrompt()
+    },
+    [modal, sessionId],
+  )
 
   const handleCancel = useCallback(() => {
     if (!runId) return
@@ -362,6 +404,8 @@ export default function ImageWorkspacePage() {
                   onRetry={() => {
                     if (planMutation.variables) planMutation.mutate(planMutation.variables)
                   }}
+                  onUsePrompt={handleUsePlanPrompt}
+                  usePromptDisabled={running || sendMutation.isPending}
                 />
               </div>
             </section>
@@ -387,7 +431,10 @@ export default function ImageWorkspacePage() {
               <div className="composer">
                 <Input.TextArea
                   value={inputValue}
-                  onChange={(event) => setInputValue(event.target.value)}
+                  onChange={(event) => {
+                    setInputValue(event.target.value)
+                    inputValueRef.current = event.target.value
+                  }}
                   disabled={workspaceQuery.isPending}
                   rows={4}
                   maxLength={100_000}
@@ -433,10 +480,25 @@ export default function ImageWorkspacePage() {
               </div>
             </section>
 
-            <section className="workspace-panel" aria-label="当前图片">
+            <section
+              className="workspace-panel"
+              aria-label={resultView === 'image' ? '当前图片' : '配图方案'}
+            >
               <div className="workspace-panel-heading">
-                <h2 className="workspace-panel-title">当前图片</h2>
-                {selectedImage?.image_url && !running && (
+                {hasPlan ? (
+                  <Segmented
+                    aria-label="结果视图"
+                    value={resultView}
+                    options={[
+                      { label: '当前图片', value: 'image' },
+                      { label: '配图方案', value: 'plan' },
+                    ]}
+                    onChange={(value) => setResultView(value as 'image' | 'plan')}
+                  />
+                ) : (
+                  <h2 className="workspace-panel-title">当前图片</h2>
+                )}
+                {resultView === 'image' && selectedImage?.image_url && !running && (
                   <Button
                     size="small"
                     disabled={alreadySaved}
@@ -447,27 +509,40 @@ export default function ImageWorkspacePage() {
                   </Button>
                 )}
               </div>
-              <div className="workspace-panel-body image-preview-body">
-                {running && (
-                  <div className="image-progress">
-                    <span className="image-progress-label">生成中……</span>
-                    <Progress percent={progress ?? 0} status="active" />
-                  </div>
-                )}
-                {selectedImage?.image_url ? (
-                  <figure className="image-preview">
-                    <img src={resolveImageUrl(selectedImage.image_url)} alt="当前图片" />
-                    <figcaption>生成于 {formatDate(selectedImage.created_at)}</figcaption>
-                  </figure>
-                ) : (
-                  !running && (
-                    <div className="article-empty">
-                      <h3>图片会在这里出现</h3>
-                      <p>输入画面描述并发送，生成完成后可保存到素材库。</p>
+              {resultView === 'plan' && hasPlan ? (
+                <div className="workspace-panel-body image-plan-results-body">
+                  <ImagePlanResults
+                    data={planData}
+                    pending={false}
+                    error={null}
+                    onRetry={() => undefined}
+                    onUsePrompt={handleUsePlanPrompt}
+                    usePromptDisabled={running || sendMutation.isPending}
+                  />
+                </div>
+              ) : (
+                <div className="workspace-panel-body image-preview-body">
+                  {running && (
+                    <div className="image-progress">
+                      <span className="image-progress-label">生成中……</span>
+                      <Progress percent={progress ?? 0} status="active" />
                     </div>
-                  )
-                )}
-              </div>
+                  )}
+                  {selectedImage?.image_url ? (
+                    <figure className="image-preview">
+                      <img src={resolveImageUrl(selectedImage.image_url)} alt="当前图片" />
+                      <figcaption>生成于 {formatDate(selectedImage.created_at)}</figcaption>
+                    </figure>
+                  ) : (
+                    !running && (
+                      <div className="article-empty">
+                        <h3>图片会在这里出现</h3>
+                        <p>输入画面描述并发送，生成完成后可保存到素材库。</p>
+                      </div>
+                    )
+                  )}
+                </div>
+              )}
             </section>
           </>
         )}
