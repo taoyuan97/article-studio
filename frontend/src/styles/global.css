@@ -15,7 +15,19 @@ body {
 /* ---------- 带壳布局（AppLayout） ---------- */
 
 .app-layout .app-layout-sider {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 10;
+  height: 100vh;
+  overflow-y: auto;
   border-right: 1px solid rgba(5, 5, 5, 0.06);
+}
+
+.app-layout .app-layout-main {
+  min-width: 0;
+  margin-left: 220px;
 }
 
 .app-layout .app-brand {

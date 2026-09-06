@@ -42,7 +42,7 @@ export default function AppLayout() {
           </ul>
         </nav>
       </Layout.Sider>
-      <Layout>
+      <Layout className="app-layout-main">
         <Layout.Content className="app-content">
           <Outlet />
         </Layout.Content>
