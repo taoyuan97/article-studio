@@ -24,6 +24,10 @@ class PlanError(Exception):
         self.message = message
 
 
+class _EmptyStructuredOutputError(Exception):
+    """The provider returned neither parsed output nor parseable raw content."""
+
+
 def _build_plan_messages(
     *,
     content: str,
@@ -100,7 +104,12 @@ async def generate_image_plan(
     resolved_instructions = (instructions or "").strip() or DEFAULT_IMAGE_PLAN_INSTRUCTIONS
 
     try:
-        chat_model = registry.get_chat_model(provider, model)
+        structured = registry.get_structured_chat_model(
+            provider,
+            model,
+            ImagePlanResult,
+            include_raw=True,
+        )
     except ValueError as exc:
         raise PlanError("PLAN_LLM_NOT_CONFIGURED", f"模型不可用：{exc}") from exc
 
@@ -113,11 +122,28 @@ async def generate_image_plan(
         instructions=resolved_instructions,
     )
     try:
-        # 默认 function_calling：完整 Pydantic schema（字段名/必填/layout 枚举）作为
-        # tool 定义传给模型，强制按 schema 输出（json_mode 不传 schema，模型会自造
-        # 字段名，见 docs/issue/ISSUE-002-image-plan-structured-output-schema-mismatch.md）
-        structured = chat_model.with_structured_output(ImagePlanResult)
-        result: ImagePlanResult = await structured.ainvoke(messages)
+        response = await structured.ainvoke(messages)
+        result: ImagePlanResult | None = response["parsed"]
+        if result is None:
+            raw = response["raw"]
+            content = getattr(raw, "content", None)
+            tool_calls = getattr(raw, "tool_calls", None)
+            content_is_empty = (
+                content is None
+                or content == []
+                or (isinstance(content, str) and not content.strip())
+            )
+            if content_is_empty and not tool_calls:
+                raise _EmptyStructuredOutputError
+            parsing_error = response.get("parsing_error")
+            if parsing_error is not None:
+                raise parsing_error
+            raise ValueError("Structured output did not contain a parsed result")
+    except _EmptyStructuredOutputError as exc:
+        raise PlanError(
+            "PLAN_LLM_ERROR",
+            "配图编排失败：模型返回了空的 JSON 内容，请手动重试。",
+        ) from exc
     except Exception as exc:
         detail = redact_sensitive(exc, secret_values or [])
         message = f"配图编排失败：{detail}"
@@ -135,6 +161,8 @@ async def generate_image_plan(
                 "请在 backend/.env 调大 LLM_MAX_OUTPUT_TOKENS 后重启后端重试。"
             )
         raise PlanError("PLAN_LLM_ERROR", message) from exc
+
+    assert result is not None
 
     result = result.model_copy(
         update={"images": _sanitize_images(result.images, len(blocks))}

@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import httpx
+from langchain_core.messages import AIMessage
 import pytest_asyncio
 
 from app.main import create_app
@@ -55,6 +56,7 @@ def make_registry(fake: FakeChatModel) -> ModelRegistry:
             supports_streaming=True,
             supports_structured_output=True,
             token_estimator=conservative_token_estimate,
+            structured_output_method="json_mode",
         ),
     )
     return registry
@@ -190,6 +192,9 @@ async def test_create_and_get_image_plan(api):
     # role / instructions 为空时回填默认值
     assert payload["role"] == DEFAULT_IMAGE_PLAN_ROLE
     assert payload["instructions"] == DEFAULT_IMAGE_PLAN_INSTRUCTIONS
+    schema, kwargs = fake.structured_output_calls[-1]
+    assert schema is ImagePlanResult
+    assert kwargs == {"method": "json_mode", "include_raw": True}
 
     # GET 恢复最近一条方案
     fetched = (
@@ -317,6 +322,52 @@ async def test_image_plan_llm_error(api):
         await client.get(f"/api/image-sessions/{session['id']}/image-plan")
     ).json()
     assert fetched == {"plan": None}
+
+
+async def test_image_plan_empty_model_content(api):
+    _, client, fake, _ = api
+    article, _ = await create_article_with_version(api)
+    session = await create_session(client, article["id"])
+
+    fake.decisions.append(plan_result(block_indices=[1]))
+    successful_response = await client.post(
+        f"/api/image-sessions/{session['id']}/image-plan",
+        json={
+            "article_id": article["id"],
+            "provider": "deepseek",
+            "model": "fake-model",
+        },
+    )
+    assert successful_response.status_code == 200
+    successful_plan = successful_response.json()
+
+    fake.decisions.append(
+        {
+            "raw": AIMessage(content=""),
+            "parsed": None,
+            "parsing_error": RuntimeError("Invalid json output"),
+        }
+    )
+
+    invocation_count = len(fake.structured_invocations)
+    response = await client.post(
+        f"/api/image-sessions/{session['id']}/image-plan",
+        json={
+            "article_id": article["id"],
+            "provider": "deepseek",
+            "model": "fake-model",
+        },
+    )
+    assert response.status_code == 502
+    error = response.json()["error"]
+    assert error["code"] == "PLAN_LLM_ERROR"
+    assert error["message"] == "配图编排失败：模型返回了空的 JSON 内容，请手动重试。"
+    assert len(fake.structured_invocations) == invocation_count + 1
+
+    fetched = (
+        await client.get(f"/api/image-sessions/{session['id']}/image-plan")
+    ).json()
+    assert fetched == successful_plan
 
 
 async def test_image_plan_output_truncated_hint(api):

@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 from collections.abc import AsyncIterator
 import asyncio
+import json
 from pathlib import Path
 from typing import Any
 
@@ -12,14 +13,24 @@ from article_agent.image_providers import ImageResult
 
 
 class FakeStructuredModel:
-    def __init__(self, parent: "FakeChatModel") -> None:
+    def __init__(self, parent: "FakeChatModel", *, include_raw: bool) -> None:
         self.parent = parent
+        self.include_raw = include_raw
 
     async def ainvoke(self, messages: list[Any], config: dict[str, Any] | None = None):
         self.parent.structured_invocations.append(messages)
         value = self.parent.decisions.pop(0)
         if isinstance(value, Exception):
             raise value
+        if self.include_raw:
+            if isinstance(value, dict) and {"raw", "parsed", "parsing_error"} <= value.keys():
+                return value
+            content = json.dumps(value.model_dump(), ensure_ascii=False)
+            return {
+                "raw": AIMessage(content=content),
+                "parsed": value,
+                "parsing_error": None,
+            }
         return value
 
 
@@ -35,12 +46,14 @@ class FakeChatModel:
         self.responses = list(responses or [])
         self.invocations: list[list[Any]] = []
         self.structured_invocations: list[list[Any]] = []
+        self.structured_output_calls: list[tuple[type[Any], dict[str, Any]]] = []
         self.chunk_delay = chunk_delay
 
     def with_structured_output(
         self, schema: type[Any], **kwargs: Any
     ) -> FakeStructuredModel:
-        return FakeStructuredModel(self)
+        self.structured_output_calls.append((schema, kwargs))
+        return FakeStructuredModel(self, include_raw=bool(kwargs.get("include_raw")))
 
     async def ainvoke(self, messages: list[Any], config: dict[str, Any] | None = None):
         self.invocations.append(messages)

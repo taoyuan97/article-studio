@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Literal, Protocol
 
 from langchain_deepseek import ChatDeepSeek
 from langchain_openai import ChatOpenAI
@@ -28,6 +28,9 @@ class ModelCapabilities:
     supports_streaming: bool
     supports_structured_output: bool
     token_estimator: TokenEstimator
+    structured_output_method: Literal["function_calling", "json_mode"] = (
+        "function_calling"
+    )
 
 
 class ModelRegistry:
@@ -59,6 +62,28 @@ class ModelRegistry:
             return self._capabilities[(provider, model)]
         except KeyError as exc:
             raise ValueError(f"Model is not registered: {provider}/{model}") from exc
+
+    def get_structured_chat_model(
+        self,
+        provider: str,
+        model: str,
+        schema: type[Any],
+        *,
+        include_raw: bool = False,
+    ) -> Any:
+        """Build a provider-compatible structured-output runnable."""
+
+        chat_model = self.get_chat_model(provider, model)
+        capabilities = self.get_capabilities(provider, model)
+        if not capabilities.supports_structured_output:
+            raise ValueError(
+                f"Model does not support structured output: {provider}/{model}"
+            )
+        return chat_model.with_structured_output(
+            schema,
+            method=capabilities.structured_output_method,
+            include_raw=include_raw,
+        )
 
     def list_models(self) -> list[dict[str, Any]]:
         return [
@@ -103,6 +128,9 @@ class ModelRegistry:
                     supports_streaming=True,
                     supports_structured_output=True,
                     token_estimator=conservative_token_estimate,
+                    structured_output_method=(
+                        "json_mode" if provider == "deepseek" else "function_calling"
+                    ),
                 ),
             )
         return registry

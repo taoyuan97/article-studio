@@ -69,3 +69,9 @@ LangChain 的 `json_mode` 仅开启模型 JSON 输出格式，**不把 Pydantic 
 1. **`with_structured_output` 的 `json_mode` 不传 schema**：只约束「是 JSON」，不约束「字段是什么」；凡依赖 Pydantic schema 解析的调用，用默认 function_calling（或确保提示词中显式给出字段结构）。
 2. **提示词中不得引用「未提供的东西」**：SystemPrompt 里「符合给定 schema」这类表述，前提是 schema 确实出现在模型可见输入中，否则等于让模型盲猜。
 3. **fake 模型无法覆盖「模型自由生成字段名」**：结构化输出链路的 fake 直接返回构造好的对象时，应在冒烟手册（`docs/ops/`）中保留真实 LLM 验收项作为最后防线。
+
+## 7. 后续兼容调整（T019，2026-09-06）
+
+DeepSeek V4 默认 thinking mode 与 LangChain `function_calling` 自动生成的指定函数式 `tool_choice` 不兼容，真实接口返回 HTTP 400。T019 将 Provider 差异集中到 `ModelRegistry`：DeepSeek 改用 `json_mode`，Moonshot 保持 `function_calling`。
+
+ISSUE-002 增加的完整 JSON 字段示例继续保留，因此 DeepSeek 虽不通过 tool 传递 schema，仍能从提示词获得字段契约；最终输出继续由 `ImagePlanResult` 做 Pydantic 严格解析。编码前协议探测和编码后真实 `deepseek-v4-flash` 配图编排均已通过。

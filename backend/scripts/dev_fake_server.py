@@ -151,16 +151,26 @@ def _fake_image_plan() -> ImagePlanResult:
 
 
 class _ScriptedStructuredModel:
-    def __init__(self, parent: "ScriptedFakeChatModel", schema: type) -> None:
+    def __init__(
+        self, parent: "ScriptedFakeChatModel", schema: type, *, include_raw: bool
+    ) -> None:
         self.parent = parent
         self.schema = schema
+        self.include_raw = include_raw
 
     async def ainvoke(self, messages: list, config: dict | None = None):
         if self.schema is ImagePlanResult:
             if "触发失败" in _latest_human_text(messages):
                 await asyncio.sleep(0.5)
                 raise RuntimeError("模拟的编排错误：SIMULATED_FAILURE（已脱敏）")
-            return _fake_image_plan()
+            result = _fake_image_plan()
+            if self.include_raw:
+                return {
+                    "raw": AIMessage(content=result.model_dump_json()),
+                    "parsed": result,
+                    "parsing_error": None,
+                }
+            return result
         intent = (
             UserIntent.GENERATE if self.parent.generation_count == 0 else UserIntent.REVISE
         )
@@ -175,7 +185,9 @@ class ScriptedFakeChatModel:
         self.chunk_delay = chunk_delay
 
     def with_structured_output(self, schema: type, **kwargs: object):
-        return _ScriptedStructuredModel(self, schema)
+        return _ScriptedStructuredModel(
+            self, schema, include_raw=bool(kwargs.get("include_raw"))
+        )
 
     def _next_article(self) -> str:
         self.generation_count += 1

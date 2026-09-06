@@ -16,7 +16,7 @@ REVISION_SYSTEM_PROMPT = """你是严谨的中文文章编辑。根据最新修�
 RELATED_SYSTEM_PROMPT = """简洁回答用户关于当前文章选题、表达或结构的问题，不生成完整正文。"""
 
 IMAGE_PLAN_SYSTEM_PROMPT = """你是文章配图编排专家。根据给定的文章全文、字数、章节结构和编号块清单，编排配图方案。
-输出必须是一个 JSON 对象且只包含以下字段，不要输出 Markdown 或解释：
+输出必须是一个 JSON 对象且只包含以下字段，不要输出 Markdown 或解释。JSON 格式示例：
 {
   "mood": "全文情绪基调（短语）",
   "style_summary": "整套配图的统一风格说明（画面媒介、色调、光影、质感）",

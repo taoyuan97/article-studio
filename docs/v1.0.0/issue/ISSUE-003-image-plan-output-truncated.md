@@ -58,3 +58,9 @@ ISSUE-002 修复（function_calling + SystemPrompt 显式 schema）后，一键�
 1. **推理模型的 `max_tokens` 预算含思考 token**：DeepSeek 等 reasoning 模型的 `reasoning_tokens` 计入输出预算，配置输出上限时需为思考过程预留充足余量（建议 ≥ 4 倍预期正文长度）。
 2. **截断类错误要可自诊断**：透传 `CompletionUsage` 原文对用户无意义；识别截断特征后给出「调哪个参数、怎么调」的指引，用户可自助解决。
 3. **`completion_tokens` == `max_tokens` 即截断铁证**：排查 LLM「输出为空/解析失败」问题时，先比对这两个值，再决定是调参还是改提示词。
+
+## 7. 后续兼容调整（T019，2026-09-06）
+
+T019 为兼容 DeepSeek V4 默认 thinking mode，将 DeepSeek 配图编排的结构化输出方式调整为 `json_mode`，并保留 thinking。`LLM_MAX_OUTPUT_TOKENS=16384` 的预算调整仍然有效；JSON Output 同样可能因输出或思考 token 达到上限而截断，现有截断诊断继续保留。
+
+DeepSeek 官方说明 JSON Output 有概率返回空 `content`。T019 对“raw 内容为空且没有 tool call”的情况增加明确中文错误，保持单次调用和手动重试，不自动关闭 thinking 或切换 Provider。
