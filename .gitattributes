@@ -1,0 +1,5 @@
+# 文件行尾策略
+# pre-push 钩子必须 LF，否则 Windows 上会因 "bad interpreter" 静默失效。
+.githooks/** text eol=lf
+# Windows 批处理保持 CRLF，避免 cmd.exe 解析异常。
+*.cmd text eol=crlf
