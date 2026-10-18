@@ -15,6 +15,7 @@ AI 驱动的文章创作与配图工作台：通过对话生成与修订长文�
 | 配图工作台   | 提示词生图（通义万相 / 即梦）、生成进度实时展示、档位与比例参数持久化、取消、保存素材；「计划」模式一键编排文章配图提示词方案（位置/排版/风格，逐条复制） |
 | 素材库       | 图片素材列表、详情查看、回链来源配图会话                                                                                                                  |
 | 发布到公众号 | 三步向导（选文章/版本 → 正文画布锚点定位插图 → 选主题即渲染预览、可编辑）一键推送至个人公众号草稿箱（仅建草稿不群发），发布记录与内容快照可回看           |
+| MCP 接入     | 本地智能体经 Streamable HTTP MCP 调用创建文章、生成/写入正文、配图、排版与发布草稿箱；默认关闭，需 `MCP_ENABLED=true` 开启                     |
 | 设置         | 页面配置 DeepSeek、Kimi、通义万相及微信公众号凭据，支持默认模型、运行参数、凭据回退和连通测试；即梦入口暂为占位                                     |
 
 ## 环境要求
@@ -186,6 +187,91 @@ PUBLISH_FAKE_MODE=true
 - **wenyan-mcp 显示不可用**：确认已安装 `@wenyan-md/mcp`，并检查 `backend\.env` 中的 `WENYAN_MCP_COMMAND`。
 - **公众号提示 IP 不在白名单**：将当前公网 IP 加入微信公众平台的 IP 白名单；家用网络公网 IP 变化后需要重新更新。
 
+## 本地智能体（MCP）接入
+
+后端内置 Streamable HTTP MCP Server，本地智能体可以像网页工作台一样创建文章、生成/写入正文、生成配图素材、按块锚点排版、渲染主题预览，并发布到公众号草稿箱（仅建草稿，不群发）。MCP 与网页共用同一份数据库和资产目录，产物在网页中直接可见。
+
+### 1. 开启
+
+在 `backend\.env` 中设置并重启后端：
+
+```dotenv
+MCP_ENABLED=true
+# 可选：设置后客户端必须携带 Authorization: Bearer <token>
+# MCP_AUTH_TOKEN=
+# Host 白名单，默认仅本机回环（逗号分隔，忽略端口）
+# MCP_ALLOWED_HOSTS=127.0.0.1,localhost,::1
+# 生成类工具默认等待秒数
+# MCP_WAIT_TIMEOUT_SECONDS=180
+```
+
+端点：`http://127.0.0.1:8000/mcp/`（兼容不带尾斜杠的 `/mcp`）。MCP 关闭时该路径返回 404。
+
+### 2. 客户端配置示例
+
+DSH / 支持 Streamable HTTP 的客户端，注册一个 HTTP MCP Server：
+
+```json
+{
+  "name": "article-studio",
+  "transport": "streamable-http",
+  "url": "http://127.0.0.1:8000/mcp/"
+}
+```
+
+Claude Code：
+
+```powershell
+claude mcp add --transport http article-studio http://127.0.0.1:8000/mcp/
+```
+
+Cursor（`%USERPROFILE%\.cursor\mcp.json`）：
+
+```json
+{
+  "mcpServers": {
+    "article-studio": { "url": "http://127.0.0.1:8000/mcp/" }
+  }
+}
+```
+
+仅支持 stdio 的旧客户端可用 `mcp-remote` 桥接：
+
+```json
+{
+  "mcpServers": {
+    "article-studio": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "http://127.0.0.1:8000/mcp/"]
+    }
+  }
+}
+```
+
+### 3. 工具与推荐流程
+
+| 阶段 | 工具 |
+| --- | --- |
+| 自检/查询 | `studio_status`、`list_articles`、`get_article`、`list_assets`、`list_publish_records` |
+| 文章 | `create_article`、`generate_article`（后端智能体写作）、`import_article_version`（智能体直写定稿）、`get_article_version`、`wait_for_run` |
+| 配图 | `plan_article_images`（块锚点方案）、`generate_image`（自动入库素材） |
+| 排版/发布 | `list_publish_themes`、`preview_publish`、`render_publish_preview`、`publish_article` |
+
+推荐顺序：`studio_status` → `create_article` / `import_article_version` → `generate_article` → `plan_article_images` + `generate_image` → `preview_publish` → `render_publish_preview` → `publish_article`。
+
+生成类工具默认等待终态；超过 `timeout_seconds` 返回 `{"status":"running","run_id":...}`，后台不中断，可继续 `wait_for_run` 续等。失败以 `CODE: message` 返回（如 `PUBLISH_CREDENTIALS_MISSING`、`PUBLISH_MCP_ERROR`、`PLAN_NO_CONTENT`、`ARTICLE_RUN_ACTIVE`）。
+
+### 4. 免真实 Key 冒烟
+
+```powershell
+cd backend
+uv run python scripts/dev_fake_server.py --port 8000   # fake 模型 + fake 生图 + fake 发布
+# 另开终端
+uv run python scripts/mcp_smoke.py --url http://127.0.0.1:8000/mcp/
+```
+
+真实发布仍需公众号凭据 + IP 白名单，且 MCP 只创建草稿不群发；详细客户端说明见 `docs/ops/manual-mcp-clients.md`。
+
 ## 开发者指南
 
 ### 目录结构
@@ -196,6 +282,7 @@ frontend/           React SPA（9 路由：仪表盘 / 文章列表 / 文章工�
   e2e/                Playwright E2E 用例（MVP 场景 A–G + 配图/素材 + 发布线 + 部署形态）
 backend/            FastAPI 单进程应用（API + SSE + SQLite 持久化）
   app/                API 路由、数据库仓储、运行管理（文章线 service / 配图线 image_service / 发布线 publish_service + wenyan_client）
+  app/mcp/            MCP Server（Streamable HTTP，工具层只做编排：文章/配图/排版/发布）
   article_agent/      LangGraph 智能体（意图路由、上下文预算压缩、脱敏）
   scripts/            假模型服务器、E2E 服务器、真实 API 冒烟脚本
   data/               运行时数据（SQLite 与图片资产；假模型/E2E 各有独立子目录）
@@ -253,6 +340,9 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
 - **数据在哪、如何重置**：全部在 `backend\data\`（业务库 `article.sqlite3`、图片 `assets/`）；假模型数据在 `data\dev-fake\`、E2E 在 `data\e2e\`，删除对应目录即重置。
 - **发布报 40164（invalid ip）/ IP 白名单**：微信要求调用方公网 IP 在白名单内；到 mp.weixin.qq.com → 设置与开发 → 基本配置 → IP 白名单，加入当前公网 IP（家宽变动后同样处理）。详见 `docs/ops/manual-tasks-t007-t010.md`。
 - **只想体验发布流程、没有公众号**：保持 `PUBLISH_FAKE_MODE=true`，发布返回 `FAKE_MEDIA_xxx` 假 media_id，全流程（含失败重试）可正常演练。
+- **MCP 端点返回 404**：确认 `backend\.env` 已设置 `MCP_ENABLED=true` 并重启后端；MCP 关闭时 `/mcp*` 统一返回 404。
+- **MCP 端点返回 401 / 403**：401 检查 `MCP_AUTH_TOKEN` 与客户端的 `Authorization: Bearer`；403 检查 `MCP_ALLOWED_HOSTS` 是否包含访问使用的主机名。
+- **智能体调生成工具超时**：把客户端 HTTP 读超时调大（如 300s+），或工具传 `wait=false` 后用 `wait_for_run` 续等；后端运行不会被客户端断开取消。
 
 ## 更多文档
 
@@ -260,8 +350,8 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
 | -------------------------- | ------------------------------------------------- |
 | `docs/prd/prd.md`          | 产品需求与验收标准                                |
 | `docs/tech/tech-design.md` | 技术设计（架构、数据流、上下文预算）              |
-| `docs/task/`               | 任务拆分 T001–T018 与实施状态                     |
-| `docs/ops/`                | 人工操作手册（真实 API 走查、E2E 手册、故障排查） |
+| `docs/task/`               | 任务拆分 T021（MCP Server）等实施任务              |
+| `docs/ops/`                | 人工操作手册（真实 API 走查、E2E 手册、MCP 接入手册、故障排查） |
 | `backend/README.md`        | 后端 API 契约、启动方式、假模型约定               |
 | `frontend/README.md`       | 前端结构、命令、与后端的契约                      |
 | `scripts/README.md`        | 启停脚本使用说明                                  |

@@ -82,6 +82,24 @@ GET    /api/assets/{id}
 
 SSE 事件协议不变：文章线 8 种（`run.started`、`assistant.delta`、`article.delta`、`message.completed`、`article.completed`、`run.cancelled`、`run.failed`、`run.completed`）；配图线 6 种（`run.started`、`image.progress`、`image.completed`、`image.failed`、`run.cancelled`、`run.completed`）。契约基准见 `tests/test_frontend_contract.py`。
 
+## MCP Server（本地智能体接入）
+
+后端内置 Streamable HTTP MCP Server（`app/mcp/`），工具直接复用 `app.state` 中的文章/配图/发布服务，不复制业务逻辑。
+
+- 端点：`http://127.0.0.1:8000/mcp/`（兼容 `/mcp`）；默认关闭。
+- 开启：`.env` 设 `MCP_ENABLED=true` 并重启；`MCP_AUTH_TOKEN` 可选 Bearer 鉴权；`MCP_ALLOWED_HOSTS` 默认仅本机回环。
+- 工具（16 个）：`studio_status` / `list_articles` / `get_article` / `list_assets` / `list_publish_records`；`create_article` / `generate_article` / `import_article_version` / `get_article_version` / `wait_for_run`；`generate_image` / `plan_article_images`；`list_publish_themes` / `preview_publish` / `render_publish_preview` / `publish_article`。
+- 生成类工具默认等待终态；超时返回 `{"status":"running","run_id":...}`，用 `wait_for_run` 续等。发布只建草稿，不群发。
+- 实现说明见 `docs/task/T021-article-studio-mcp.md`，客户端接入见仓库根 `README.md` 与 `docs/ops/manual-mcp-clients.md`。
+
+冒烟（无需真实 Key，先启动假模型服务器）：
+
+```powershell
+uv run python scripts/dev_fake_server.py --port 8000
+# 另开终端
+uv run python scripts/mcp_smoke.py --url http://127.0.0.1:8000/mcp/
+```
+
 ## 真实 API 冒烟（不进离线测试）
 
 ```powershell
@@ -95,7 +113,7 @@ uv run python scripts/test_real_image_providers.py
 ## 假模型服务器（不消耗真实 API 额度）
 
 ```powershell
-# 前端联调：假 LLM + 假生图，API/SSE/SQLite 行为与真实后端完全一致
+# 前端联调：假 LLM + 假生图，API/SSE/SQLite 行为与真实后端完全一致；MCP 默认开启
 uv run python scripts/dev_fake_server.py [--port 8000] [--data-dir data/dev-fake]
 
 # E2E 专用：同上，但 SERVE_FRONTEND=true 单进程托管 frontend/dist（生产形态），--wipe 清空数据
