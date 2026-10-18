@@ -289,6 +289,9 @@ def build_application(
         publish_fake_mode=True,
         wechat_app_id="fake-app-id",
         wechat_app_secret="fake-secret",
+        # MCP：fake 联调默认开启，便于本地智能体免真实 Key 走完整链路
+        mcp_enabled=True,
+        mcp_allowed_hosts="127.0.0.1,localhost,::1,test",
     )
     registry = ModelRegistry()
     for provider in ("deepseek", "moonshot"):

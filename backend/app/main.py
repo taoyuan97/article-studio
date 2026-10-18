@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import re
 from contextlib import asynccontextmanager
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -16,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from article_agent.agent import ArticleAgent
@@ -31,12 +30,14 @@ from article_agent.registry import ModelRegistry
 
 from .database import NotFoundError, Repository, RunNotActiveError
 from .image_service import ImageRunManager
+from .mcp.asgi import McpGuardMiddleware, build_mcp_bundle
 from .message_attachments import (
     AttachmentValidationError,
     MessageAttachmentRequest,
     validate_attachments,
 )
 from .plan_service import PlanError, generate_image_plan
+from .publish_models import ImagePlacement
 from .publish_service import (
     build_publish_markdown,
     execute_publish,
@@ -76,26 +77,6 @@ class AssetCreate(BaseModel):
     source_session_id: str = Field(min_length=1)
     source_message_id: str = Field(min_length=1)
     title: str = Field(min_length=0, max_length=200)
-
-
-_POSITION_PATTERN = re.compile(
-    r"^(top|bottom|after_section_[1-9]\d*|after_block_[1-9]\d*)$"
-)
-
-
-class ImagePlacement(BaseModel):
-    asset_id: str = Field(min_length=1)
-    position: str = Field(min_length=1)
-    order: int = 0
-
-    @field_validator("position")
-    @classmethod
-    def check_position(cls, value: str) -> str:
-        if not _POSITION_PATTERN.match(value):
-            raise ValueError(
-                "position 必须是 top、bottom、after_section_{n} 或 after_block_{n}（n>=1）"
-            )
-        return value
 
 
 class PublishPreviewRequest(BaseModel):
@@ -293,7 +274,12 @@ def create_app(
                     dist_dir,
                 )
         try:
-            yield
+            mcp_bundle = getattr(application.state, "mcp_bundle", None)
+            if mcp_bundle is None:
+                yield
+            else:
+                async with mcp_bundle.lifespan():
+                    yield
         finally:
             await manager.shutdown()
             await image_manager.shutdown()
@@ -830,6 +816,14 @@ def create_app(
     @application.get("/api/publish/records/{record_id}")
     async def get_publish_record(record_id: str, request: Request):
         return repository(request).get_publish_record(record_id)
+
+    # MCP server: mounted for the app lifetime; per-request access is gated by
+    # MCP_ENABLED / MCP_ALLOWED_HOSTS / MCP_AUTH_TOKEN in McpGuardMiddleware.
+    # Mounted before the SPA fallback (added in lifespan) so /mcp/ always wins.
+    mcp_bundle = build_mcp_bundle(application)
+    application.state.mcp_bundle = mcp_bundle
+    application.mount("/mcp", mcp_bundle.app, name="mcp")
+    application.add_middleware(McpGuardMiddleware)
 
     return application
 

@@ -54,6 +54,16 @@ class Settings(BaseSettings):
     # Fake mode: publish without spawning the MCP subprocess or real WeChat calls.
     publish_fake_mode: bool = False
 
+    # Article Studio MCP server (Streamable HTTP at /mcp/), consumed by local agents.
+    # Disabled by default: enable explicitly in backend/.env.
+    mcp_enabled: bool = False
+    # Optional bearer token; when set, every /mcp request must carry it.
+    mcp_auth_token: SecretStr | None = None
+    # Comma-separated hostname allowlist (ports ignored), defense in depth.
+    mcp_allowed_hosts: str = "127.0.0.1,localhost,::1"
+    # Default wait budget for MCP generation tools before returning a run handle.
+    mcp_wait_timeout_seconds: float = Field(default=180, gt=0)
+
     llm_timeout_seconds: float = Field(default=180, gt=0)
     llm_max_retries: int = Field(default=2, ge=0)
     # 推理模型的思考 token 计入输出预算，多字段结构化输出需预留充足余量
