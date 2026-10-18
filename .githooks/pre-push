@@ -1,0 +1,18 @@
+#!/bin/sh
+# 拦截本地直推 main / master（含 force push 与删除 main）——main 只能通过 PR 更新。
+# 启用：git config core.hooksPath .githooks
+# 规范：docs/git/branch-workflow.md
+# 注意：本文件必须保持 LF（见 .gitattributes），Windows 上 CRLF 会导致 bad interpreter 静默失效。
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  case "$remote_ref" in
+    refs/heads/main|refs/heads/master)
+      echo "✗ 已被分支规则拦截：禁止直接推送到 main/master。" >&2
+      echo "  请改用短命分支 + PR（见 docs/git/branch-workflow.md）。" >&2
+      echo "  agent 无权使用 --no-verify 绕过；hotfix 例外仅由人决定。" >&2
+      exit 1
+      ;;
+  esac
+done
+
+exit 0
