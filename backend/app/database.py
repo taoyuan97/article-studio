@@ -689,6 +689,159 @@ class Repository:
             ).fetchone()
         return dict(version), dict(message)
 
+    def get_version_by_run_id(self, run_id: str) -> dict[str, Any]:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM article_versions WHERE run_id=?", (run_id,)
+            ).fetchone()
+        if row is None:
+            raise NotFoundError("版本不存在")
+        return dict(row)
+
+    def create_imported_version(
+        self,
+        article_id: str,
+        *,
+        title: str,
+        content_markdown: str,
+        instruction: str | None = None,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Persist a caller-supplied markdown result as a new version.
+
+        Reuses the normal run/message/version tables so the web workspace shows
+        the import in the conversation timeline and version panel. No model is
+        called; the synthetic run is marked completed immediately. Active runs
+        are rejected so an import can never race a streaming generation.
+        """
+        timestamp = now_iso()
+        with self.transaction() as connection:
+            article = connection.execute(
+                "SELECT * FROM articles WHERE id=?", (article_id,)
+            ).fetchone()
+            if article is None:
+                raise NotFoundError("文章不存在")
+            conversation = connection.execute(
+                "SELECT * FROM conversations WHERE article_id=?", (article_id,)
+            ).fetchone()
+            if conversation is None:
+                raise NotFoundError("会话不存在")
+            active = connection.execute(
+                """SELECT id FROM generation_runs
+                   WHERE article_id=? AND status IN ('queued','running')""",
+                (article_id,),
+            ).fetchone()
+            if active:
+                raise RunNotActiveError("ARTICLE_RUN_ACTIVE")
+
+            run_id = str(uuid4())
+            user_message_id = str(uuid4())
+            assistant_message_id = str(uuid4())
+            version_id = str(uuid4())
+            provider = article["provider"]
+            model = article["model"]
+            user_content = (instruction or "").strip() or f"导入定稿：{title.strip()}"
+
+            sequence = self._next_sequence(connection, conversation["id"])
+            connection.execute(
+                """INSERT INTO messages
+                   (id,conversation_id,run_id,sequence_number,role,message_type,content,status,provider,model,created_at,completed_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    user_message_id,
+                    conversation["id"],
+                    run_id,
+                    sequence,
+                    "user",
+                    "chat",
+                    user_content,
+                    "completed",
+                    provider,
+                    model,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            connection.execute(
+                """INSERT INTO generation_runs
+                   (id,article_id,conversation_id,user_message_id,provider,model,status,started_at,completed_at)
+                   VALUES (?,?,?,?,?,?,?,?,?)""",
+                (
+                    run_id,
+                    article_id,
+                    conversation["id"],
+                    user_message_id,
+                    provider,
+                    model,
+                    "completed",
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            version_number = int(
+                connection.execute(
+                    "SELECT COALESCE(MAX(version_number),0)+1 AS value FROM article_versions WHERE article_id=?",
+                    (article_id,),
+                ).fetchone()["value"]
+            )
+            connection.execute(
+                """INSERT INTO article_versions
+                   (id,article_id,parent_version_id,version_number,title,content_markdown,instruction,provider,model,run_id,created_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    version_id,
+                    article_id,
+                    article["current_version_id"],
+                    version_number,
+                    title.strip(),
+                    content_markdown,
+                    user_content,
+                    provider,
+                    model,
+                    run_id,
+                    timestamp,
+                ),
+            )
+            sequence = self._next_sequence(connection, conversation["id"])
+            connection.execute(
+                """INSERT INTO messages
+                   (id,conversation_id,run_id,sequence_number,role,message_type,content,status,provider,model,created_at,completed_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    assistant_message_id,
+                    conversation["id"],
+                    run_id,
+                    sequence,
+                    "assistant",
+                    "generation",
+                    content_markdown,
+                    "completed",
+                    provider,
+                    model,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            connection.execute(
+                "UPDATE generation_runs SET assistant_message_id=? WHERE id=?",
+                (assistant_message_id, run_id),
+            )
+            connection.execute(
+                """UPDATE articles SET current_version_id=?,title=?,status='generated',updated_at=?
+                   WHERE id=?""",
+                (version_id, title.strip(), timestamp, article_id),
+            )
+            connection.execute(
+                "UPDATE conversations SET updated_at=? WHERE id=?",
+                (timestamp, conversation["id"]),
+            )
+            version = connection.execute(
+                "SELECT * FROM article_versions WHERE id=?", (version_id,)
+            ).fetchone()
+            message = connection.execute(
+                "SELECT * FROM messages WHERE id=?", (assistant_message_id,)
+            ).fetchone()
+        return dict(version), dict(message)
+
     def cancel_run(self, run_id: str) -> bool:
         timestamp = now_iso()
         with self.transaction() as connection:
