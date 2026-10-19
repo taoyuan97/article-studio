@@ -91,6 +91,8 @@ uv run pytest -p no:cacheprovider
 
 预期：`150 passed`（2 条既有依赖告警，不影响）。
 
+> 已知环境抖动：`test_wenyan_client.py::test_render_markdown_real_node_integration` 依赖 node 冷启动，机器负载高时可能超过 30s 超时导致全量偶发 1 条失败；单跑该用例复跑可稳定通过，属环境抖动而非功能缺陷。若遇到，先单跑复验再判定 AT-03。
+
 ## 4. 手工验收用例
 
 > 每条用例在 §5 记录「结果（通过/不通过）」与证据；不通过时写清现象与影响范围。
