@@ -40,6 +40,7 @@ class SettingsStore:
         "llm_moonshot": ("moonshot_api_key",),
         "image_wanxiang": ("aliyun_wanxiang_api_key",),
         "wechat": ("wechat_app_id", "wechat_app_secret"),
+        "mcp": ("mcp_auth_token",),
     }
     DEFAULT_FIELDS = ("default_llm_provider", "default_image_provider")
     RUNTIME_FIELDS = (
@@ -51,6 +52,13 @@ class SettingsStore:
         "image_timeout_seconds",
     )
     WECHAT_FIELDS = ("wechat_app_id", "wechat_app_secret")
+    MCP_FIELDS = (
+        "mcp_enabled",
+        "mcp_auth_enabled",
+        "mcp_auth_token",
+        "mcp_allowed_hosts",
+        "mcp_wait_timeout_seconds",
+    )
 
     def __init__(self, base: Settings, path: Path) -> None:
         self.path = Path(path)
@@ -150,7 +158,9 @@ class SettingsStore:
     def _allowed_fields(cls) -> set[str]:
         return {
             field for fields in cls.PROVIDER_FIELDS.values() for field in fields
-        } | set(cls.DEFAULT_FIELDS) | set(cls.RUNTIME_FIELDS) | set(cls.WECHAT_FIELDS)
+        } | set(cls.DEFAULT_FIELDS) | set(cls.RUNTIME_FIELDS) | set(
+            cls.WECHAT_FIELDS
+        ) | set(cls.MCP_FIELDS)
 
     def _load(self) -> None:
         if not self.path.is_file():
