@@ -223,7 +223,12 @@ def create_app(
             )
             if value
         ]
-        all_secrets = secrets + image_secrets + wechat_secrets
+        mcp_secrets = [
+            value.get_secret_value()
+            for value in (resolved_settings.mcp_auth_token,)
+            if value
+        ]
+        all_secrets = secrets + image_secrets + wechat_secrets + mcp_secrets
         manager = RunManager(
             repository,
             agent,

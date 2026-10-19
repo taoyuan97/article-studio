@@ -10,6 +10,7 @@ keeps the gate in front of routing and also normalises ``/mcp`` to ``/mcp/``
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -156,9 +157,14 @@ class McpGuardMiddleware:
                 return
 
         token = settings.mcp_auth_token
-        if token is not None:
-            expected = f"Bearer {token.get_secret_value()}"
-            if (headers.get("authorization") or "") != expected:
+        if settings.mcp_auth_enabled:
+            supplied = headers.get("authorization") or ""
+            expected = token.get_secret_value() if token is not None else ""
+            scheme, _, value = supplied.strip().partition(" ")
+            authorized = bool(expected) and scheme.lower() == "bearer" and hmac.compare_digest(
+                value.strip(), expected
+            )
+            if not authorized:
                 await _send_json(
                     send,
                     401,

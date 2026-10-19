@@ -1,4 +1,6 @@
 .env
+.env.bak
+.env.*.bak
 .pytest_cache/
 .test-tmp/
 .venv/
