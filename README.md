@@ -193,11 +193,14 @@ PUBLISH_FAKE_MODE=true
 
 ### 1. 开启
 
-在 `backend\.env` 中设置并重启后端：
+**推荐**：打开网页「设置 → MCP 配置」Tab，开启服务并配置 Bearer 鉴权（可选）、Allowed Hosts、生成工具等待时间；保存即生效，无需重启。页面配置覆盖 `.env`，清除后回退 `.env`。
+
+也可在 `backend\.env` 中配置并重启后端（无浏览器/首次启动兜底）：
 
 ```dotenv
 MCP_ENABLED=true
-# 可选：设置后客户端必须携带 Authorization: Bearer <token>
+# 可选：启用鉴权（设置 Token 时自动启用；也可显式关闭）
+# MCP_AUTH_ENABLED=true
 # MCP_AUTH_TOKEN=
 # Host 白名单，默认仅本机回环（逗号分隔，忽略端口）
 # MCP_ALLOWED_HOSTS=127.0.0.1,localhost,::1
@@ -209,15 +212,7 @@ MCP_ENABLED=true
 
 ### 2. 客户端配置示例
 
-DSH / 支持 Streamable HTTP 的客户端，注册一个 HTTP MCP Server：
-
-```json
-{
-  "name": "article-studio",
-  "transport": "streamable-http",
-  "url": "http://127.0.0.1:8000/mcp/"
-}
-```
+> DSH 使用 profile patch YAML（`~/.dsh/profiles/desktop/cordis.patch.yml`，需设置 `toolCallTimeoutMs`），完整示例见 [`docs/mcp/mcp-setup.md`](docs/mcp/mcp-setup.md) §6.1。
 
 Claude Code：
 
@@ -270,7 +265,7 @@ uv run python scripts/dev_fake_server.py --port 8000   # fake 模型 + fake 生�
 uv run python scripts/mcp_smoke.py --url http://127.0.0.1:8000/mcp/
 ```
 
-真实发布仍需公众号凭据 + IP 白名单，且 MCP 只创建草稿不群发；详细客户端说明见 `docs/ops/manual-mcp-clients.md`。
+真实发布仍需公众号凭据 + IP 白名单，且 MCP 只创建草稿不群发；完整客户端配置与排障见 [`docs/mcp/mcp-setup.md`](docs/mcp/mcp-setup.md)。
 
 ## 开发者指南
 

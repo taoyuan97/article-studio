@@ -1,12 +1,12 @@
 # T021：Article Studio MCP Server（本地智能体接入）
 
-> **状态**：`WAIT_ACCEPTANCE`
-> **分支**：`feature/T021-article-studio-mcp`
+> **状态**：`WAIT_ACCEPTANCE`（原 MCP 需求 + 2026-10-19 MCP 设置页追加需求均已完成 AI 自测，待人工验收）
+> **分支**：`feature/T021-article-studio-mcp`（按 D20 直接堆叠）
 > **版本归属**：下一版本（建议 v1.1.0，验收通过后由人工打 tag）
 
 ## 1. 任务信息
 
-- 状态：`WAIT_ACCEPTANCE`（AI 自测通过，待人工验收，2026-10-18）
+- 状态：`WAIT_ACCEPTANCE`（原 MCP 需求 AI 自测通过；2026-10-19 设置页追加需求已实现并自测）
 - 优先级：P1
 - 类型：MCP Server / 本地智能体集成
 - 前置任务：T003（文章线）、T004（配图线）、T007–T010（公众号发布）、T015（配图计划）、T018（设置与运行态配置）
@@ -67,6 +67,18 @@ MCP 产生的文章版本、素材、发布记录与网页工作台共用同一�
 | D8 | 安全 | Host 白名单（默认 127.0.0.1/localhost/::1）、可选 `MCP_AUTH_TOKEN` Bearer 校验、错误脱敏、不提供删除类工具；MCP 关闭时 `/mcp*` 返回 404 |
 | D9 | 文档编号 | `docs/task/T021-article-studio-mcp.md`（按当前指定放 `docs/task/`） |
 | D10 | Git 纪律 | 单分支 `feature/T021-article-studio-mcp`，Conventional Commits + 任务编号；PR 由人工创建与 merge |
+| D11 | MCP 配置来源 | **A**：`settings.json` 覆盖 `.env`；页面显示来源；清除覆盖回退 `.env`（2026-10-19 确认） |
+| D12 | 鉴权模型 | **A**：单账号单 Token，手动填写 + “生成随机 Token”辅助；显式“启用 Bearer 鉴权”开关（2026-10-19） |
+| D13 | 空值/关闭鉴权 | **A**：新增 `MCP_AUTH_ENABLED`；空白 Token 一律视为 None 且 API 拒绝；页面开关可覆盖 `.env` Token 关闭（2026-10-19） |
+| D14 | 生效方式 | **A**：设置页保存即热生效，无需重启后端（2026-10-19） |
+| D15 | 运行中任务 | **A**：有文章/配图任务运行时仍允许保存 MCP 配置（不影响 run）（2026-10-19） |
+| D16 | 测试配置 | **A**：配置级自检（enabled/工具数/Hosts/Token 状态），不发起网络请求（2026-10-19） |
+| D17 | Allowed hosts | **A**：精确主机名、逗号分隔、忽略端口、默认回环、空→默认、最多 20 条、不支持通配/IP/CIDR（2026-10-19） |
+| D18 | UI 位置 | **A**：设置页第三个 Tab `?tab=mcp`（2026-10-19） |
+| D19 | 文档/审计范围 | **A**：本任务一并修空 Token 语义、`.env.bak` 忽略、DSH/CWD/401 文档；selftest JSON/门槛另列 T023（2026-10-19） |
+| D20 | 分支与依赖 | **B**：直接在 `feature/T021-article-studio-mcp` 堆叠开发，PR 顺序合并（2026-10-19） |
+| D21 | Token 生成 | **A**：手填 + “生成随机 Token”按钮；保存后仅显示掩码、可 reveal（2026-10-19） |
+| D22 | 客户端配置展示 | **A**：Tab 展示端点 + 可复制 DSH YAML 片段（含 `toolCallTimeoutMs`），不自动写 `~/.dsh`（2026-10-19） |
 
 ## 5. 实施步骤与阶段验收
 
@@ -269,8 +281,67 @@ FastAPI 同进程（单进程、单数据源）
 - 网页工作台的视觉走查（MCP 产出的版本/素材/发布记录）。
 - 真实公众号（凭据 + IP 白名单）发布草稿并核对草稿箱内容。
 
-## 14. 变更记录
+## 14. 追加需求：MCP 配置设置页（2026-10-19）
+
+### 14.1 背景与问题
+
+MCP 参数此前只能手改 `backend/.env` 并重启，且存在确认缺陷：
+
+- 空 `MCP_AUTH_TOKEN=` 被当作“启用空 Token”：标准客户端全部 401，仅原始头 `Authorization: Bearer `（尾空格）可 200（`config.py:61`、`asgi.py:158-161`、`.env.example:60`；本机只读探针已复现）。
+- `SettingsStore` 白名单不含 MCP 字段（`settings_store.py:149-153`），`status` 无 MCP 段（`settings.py:176-196`），页面无法查看/修改。
+- 配置校验/文档缺口：`.env.bak` 未被 git 忽略；文档 CWD 不统一；DSH 章节为不可执行 JSON，真实配置在 `~/.dsh/profiles/desktop/cordis.patch.yml` 的 profile patch，且缺 `toolCallTimeoutMs`。
+
+### 14.2 范围
+
+**做**
+
+- 后端：`MCP_ENABLED`、`MCP_AUTH_ENABLED`、`MCP_AUTH_TOKEN`、`MCP_ALLOWED_HOSTS`、`MCP_WAIT_TIMEOUT_SECONDS` 纳入 `SettingsStore` 覆盖；新增 settings `mcp` 状态与 PATCH/清除/reveal/probe 接口；保存热生效；空值规范化；Token 纳入脱敏。
+- 前端：设置页第三个 Tab「MCP 配置」，含服务开关、鉴权开关/Token、Hosts、等待超时、状态/端点/工具数、测试配置、DSH YAML 片段复制。
+- 文档与前置修复：空 Token 语义、`.env.bak` 忽略、DSH/CWD/401 文档；验收用例补充。
+
+**不做**
+
+- 多凭据/有效期/吊销、IP 白名单、限流（参考页能力，不适用单机单用户）；多公众号；发布流程改造；自动写入 DSH 配置；登录/权限体系；selftest JSON/门槛改造（另列 T023）。
+
+### 14.3 设计要点
+
+- **配置模型**：`.env` 基线 + `settings.json` 覆盖；`MCP_AUTH_ENABLED` 为显式开关（未设置时按 Token 是否存在自动推断，保持兼容）；Token 空白→None，启用鉴权但无 Token 在保存/启动时 422/失败；Hosts 空白→回环默认；超时 30–600s。
+- **API**：`GET /api/settings/status` 增 `mcp`；`PATCH /api/settings/mcp`、`DELETE /api/settings/mcp/token`、`POST /api/settings/mcp/token/reveal`、`POST /api/settings/probe/mcp`；沿用 revision、`require_local_origin`、`Cache-Control: no-store`；MCP 变更不阻断运行中任务。
+- **热生效**：`_commit_mcp_change` 替换 `app.state.settings` + `secret_values`；`McpGuardMiddleware` 下一请求即按新配置判定（enabled/token/hosts）。
+- **UI**：`SettingsPage` 第三 Tab；状态卡（启用/端点/16 工具/来源）、服务开关（开启二次确认）、鉴权开关+Token（掩码/来源/眼睛/清除/随机生成）、Hosts 白名单（一行一个、恢复默认）、等待超时、保存/测试配置、DSH YAML 片段复制；`?tab=mcp` 同步。
+- **安全**：默认关闭；启用二次确认与仅本机监听提示；Token 掩码/reveal/clear；`settings.json` 明文存储的既有警告复用；保存后客户端 Token 变化会 401，属预期。
+
+### 14.4 实施阶段
+
+| 阶段 | 内容 |
+|---|---|
+| s6 | 空 Token/默认值规范化、asgi 鉴权比较、`.env.bak` 忽略、`.env.example` 注释 Token |
+| s7 | 后端 SettingsStore/settings API/status/probe/热生效 + pytest |
+| s8 | 前端 types/api/MCP Tab/McpCard + Vitest |
+| s9 | docs/mcp、README、backend README、T021 验收用例更新；全量回归与 fake 服务热生效冒烟 |
+
+### 14.5 追加验收标准
+
+- [x] [AI] 页面可开启/关闭 MCP、配置/清除/查看/生成 Token、编辑 Hosts/超时；保存后无需重启即生效。
+- [x] [AI] 空 Token 不再启用鉴权；标准客户端未启用鉴权时 initialize 成功；启用后无 Token 401、正确 Token 200。
+- [x] [AI] 页面显示 runtime/env 来源与掩码；revision 冲突 409；清除覆盖回退 `.env`；Token 不进入 status/日志。
+- [x] [AI] MCP 关闭时 `/mcp*` 404；开启时 selftest 16 工具通过。
+- [x] [AI] `.env.bak` 不再被 git 跟踪；docs/mcp 的 DSH/CWD/401 指引可直接执行。
+- [x] [AI] 后端全量 pytest、前端 test/lint/build 通过。
+- [ ] [人工] 浏览器完成一次开启→配置 Token→客户端接入→关闭的完整流程；网页与客户端结果一致。
+
+### 14.6 实施与自测记录（2026-10-19）
+
+- 后端：`MCP_AUTH_ENABLED` + 空 Token 规范化；`SettingsStore` MCP 字段/凭据组；`settings` 增加 `mcp` 状态与 PATCH/DELETE/reveal/probe；`_commit_mcp_change` 热生效（不阻断运行中任务）；`asgi` 鉴权改为显式开关 + 常量时间比较；Token 纳入脱敏；`.env.bak` 忽略。
+- 前端：`SettingsPage` 增加 `MCP 配置` Tab（`?tab=mcp`）与 `McpCard`（开关/鉴权/随机 Token/Hosts/超时/状态/测试配置/DSH YAML 复制）；`types.ts`/`settings.ts` 同步。
+- 文档：`docs/mcp/mcp-setup.md` 改为设置页优先、`.env` 兜底，补 DSH profile patch/`toolCallTimeoutMs`、CWD、401/备份说明；README/backend README/tech-design/验收用例同步。
+- 自测：后端 `159 passed`；前端 `114 passed`、`pnpm lint` 0、`pnpm build` 通过；fake 服务（8001）实测热生效：关闭→`/mcp` 404、开启+Token→无 Token 401/正确 Token 200、关鉴权→200、清 Token→回退、probe 配置级通过；Token 未出现在响应中。
+- 未覆盖：真实浏览器视觉走查、真实客户端（DSH/Claude/Cursor）接入、真实公众号发布（留人工）。
+
+## 15. 变更记录
 
 - 2026-10-18 初版：基于现有文章/配图/发布能力新增 MCP Server；确认单公众号、双内容来源、仅 Streamable HTTP、显式开启（D1–D4）。
 - 2026-10-18 对齐团队 Git/任务工作流：补充分支与状态头、范围外清单、实施步骤与验收分层、风险与对策、变更记录；新增 `get_version_by_run_id` 以支持 `wait_for_run` 精确回取版本。
 - 2026-10-18 开发完成并自测：新增 `app/mcp/` 16 工具、守卫中间件、定稿导入；全量 pytest 150 passed；fake 全链路冒烟通过；状态置 `WAIT_ACCEPTANCE`。
+- 2026-10-19 追加需求：按 D11–D22 在 T021 内实现「MCP 配置设置页」（settings.json 覆盖 + 热生效 + 显式鉴权开关 + 配置级自检），并修复空 Token 语义、`.env.bak` 忽略与 DSH/CWD/401 文档；状态回到 `CODING`。
+- 2026-10-19 追加需求自测完成：后端 159 passed、前端 114 passed/lint/build 通过；fake 服务实测开关/Token/Hosts 热生效；状态置 `WAIT_ACCEPTANCE`，等待人工浏览器与客户端验收。

@@ -267,9 +267,10 @@ WECHAT_APP_SECRET=        # AppSecret；需将本机公网 IP 加入白名单
 WENYAN_MCP_COMMAND=wenyan-mcp   # 发布子进程命令（stdio MCP，按需拉起）
 PUBLISH_FAKE_MODE=false   # true 时不启动子进程、不外呼；代码默认 false
 
-# MCP Server（T021，本地智能体接入；默认关闭）
+# MCP Server（T021，本地智能体接入；默认关闭；页面「设置 > MCP 配置」保存即生效）
 MCP_ENABLED=false
-MCP_AUTH_TOKEN=            # 可选 Bearer Token
+MCP_AUTH_ENABLED=          # 显式鉴权开关；未设置时按 Token 自动判断
+MCP_AUTH_TOKEN=            # 可选 Bearer Token；空白视为未设置
 MCP_ALLOWED_HOSTS=127.0.0.1,localhost,::1
 MCP_WAIT_TIMEOUT_SECONDS=180
 ```
@@ -326,12 +327,13 @@ POST   /api/settings/probe/{provider}
 - **目标**：本地智能体（DSH / Claude Code / Cursor 等）经 Streamable HTTP MCP 调用文章工作台，完成「创建文章 → 生成/写入正文 → 配图 → 排版 → 发布草稿箱」闭环；产物与网页共用同一 SQLite / 资产目录。
 - **server（`app/mcp/server.py`）**：`FastMCP(name="article-studio", streamable_http_path="/", stateless_http=True, json_response=True)`，`instructions` 写明推荐流程与超时/错误语义；注册 16 个工具（meta 5 / 文章 5 / 配图 2 / 排版发布 4）。工具层只做参数校验、run 等待与错误映射，业务逻辑全部复用现有 service。
 - **context（`app/mcp/context.py`）**：`McpContext` 晚绑定 `app.state`（lifespan 中才创建服务）；统一整形 article/version/asset/publish 记录；`collect_run_events` 用 `asyncio.timeout` 收集到终态，超时返回 `running_payload`；`guarded` 装饰器把 `NotFoundError` / `RunNotActiveError` / 未知异常映射为 `ToolError("CODE: message")` 并用 `redact_sensitive` 脱敏。
-- **挂载与安全（`app/mcp/asgi.py`）**：MCP 子应用常驻挂载 `/mcp`，请求前由纯 ASGI 中间件校验 `MCP_ENABLED`（关闭→404）、`MCP_ALLOWED_HOSTS` / 可选 `Origin`（→403）、可选 `MCP_AUTH_TOKEN`（→401），并把 `/mcp` 规整为 `/mcp/`（MCP 客户端不跟随 Mount 的 307）。MCP 的 session manager 在专用长驻 task 中运行（mounted sub-app lifespan 不会自动执行，且 anyio cancel scope 要求同任务进出），FastAPI lifespan 只负责启停。
+- **挂载与安全（`app/mcp/asgi.py`）**：MCP 子应用常驻挂载 `/mcp`，请求前由纯 ASGI 中间件校验 `MCP_ENABLED`（关闭→404）、`MCP_ALLOWED_HOSTS` / 可选 `Origin`（→403）、可选 Bearer（`MCP_AUTH_ENABLED` + `MCP_AUTH_TOKEN`，→401；Token 大小写不敏感 scheme + 常量时间比较），并把 `/mcp` 规整为 `/mcp/`（MCP 客户端不跟随 Mount 的 307）。MCP 的 session manager 在专用长驻 task 中运行（mounted sub-app lifespan 不会自动执行，且 anyio cancel scope 要求同任务进出），FastAPI lifespan 只负责启停。
+- **配置与热生效（T021 追加）**：MCP 五个字段纳入 `SettingsStore` 覆盖（`.env` 基线 + `settings.json` 覆盖）；`GET /api/settings/status` 返回 `mcp` 状态（端点、工具数、来源、Token 掩码）；`PATCH /api/settings/mcp`、`DELETE /mcp/token`、`POST /mcp/token/reveal`、`POST /api/settings/probe/mcp`。保存走 `_commit_mcp_change` 替换 `app.state.settings`，下一次 `/mcp` 请求即生效，无需重启；不阻断运行中的文章/图片任务。空 Token 在 `Settings` 校验中规范化为 None，`MCP_AUTH_ENABLED=true` 但 Token 为空会 422/启动失败，杜绝“空 Token 鉴权”。
 - **长任务语义**：`generate_article` / `generate_image` 默认 `wait=true` 等到终态；超过 `timeout_seconds`（缺省 `MCP_WAIT_TIMEOUT_SECONDS`，上限 600s）返回 `{status:"running", run_id}` 且后台不取消，`wait_for_run(run_id, kind)` 续等；失败返回结构化 `ToolError`。
 - **定稿导入**：`Repository.create_imported_version()` 在一个事务内合成 completed run + user/assistant 消息 + 新版本（复用既有 `generation_runs`/`messages`/`article_versions` 约束），使智能体直写正文也能在网页工作台时间线与版本面板正常展示；`get_version_by_run_id()` 供 `wait_for_run` 精确回取版本。
 - **共用模型**：`ImagePlacement` 与位置校验从 `main.py` 抽到 `app/publish_models.py`，REST 与 MCP 共用同一 `after_block_{n}` 契约。
 - **安全边界**：默认关闭、仅本机回环 Host、可选 Bearer、错误脱敏、不提供删除类工具；发布只建草稿，不群发。
-- **测试与冒烟**：`tests/test_mcp_server.py` 覆盖工具注册、关闭时 404、内存 ClientSession 全链路（fake LLM/生图/发布）、HTTP 挂载（含 `/mcp` 无尾斜杠）、Token/Host 拦截、生成超时后 `wait_for_run` 续等、定稿导入版本号；`scripts/mcp_smoke.py` 连本地 `/mcp/` 跑人工全链路冒烟。
+- **测试与冒烟**：`tests/test_mcp_server.py` 覆盖工具注册、关闭时 404、内存 ClientSession 全链路（fake LLM/生图/发布）、HTTP 挂载（含 `/mcp` 无尾斜杠）、Token/Host 拦截、生成超时后 `wait_for_run` 续等、定稿导入版本号；`tests/test_settings.py` 覆盖 MCP 状态/热生效/Token 掩码与 reveal/清除、空值规范化、Hosts 校验、revision 冲突、probe；`scripts/mcp_smoke.py` 连本地 `/mcp/` 跑人工全链路冒烟。
 
 CORS：开发模式继续允许 `http://localhost:5173` / `http://127.0.0.1:5173`（Vite dev server 默认端口，兜底直连场景）；开发主路径走 Vite proxy（同源，不触发 CORS）。
 

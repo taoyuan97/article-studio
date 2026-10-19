@@ -33,7 +33,7 @@ pnpm dev
 - fake 服务默认：`MCP_ENABLED=true`、`PUBLISH_FAKE_MODE=true`、假公众号凭据、`MCP_ALLOWED_HOSTS=127.0.0.1,localhost,::1,test`。
 - 数据隔离在 `backend/data/mcp-acceptance/`，删除即可重置。
 
-### 2.2 真实环境（仅 MT-16 / RT-03 需要）
+### 2.2 真实环境（仅 MT-16 / MT-23 需要）
 
 - `backend/.env`：真实 LLM Key、通义万相 Key、`WECHAT_APP_ID` / `WECHAT_APP_SECRET`、`PUBLISH_FAKE_MODE=false`、`MCP_ENABLED=true`。
 - 微信公众平台 → 设置与开发 → 基本配置：把本机公网 IP 加入 IP 白名单。
@@ -41,8 +41,10 @@ pnpm dev
 
 ### 2.3 MCP 客户端配置（任选一个）
 
+> DSH 使用 `~/.dsh/profiles/desktop/cordis.patch.yml` 的 profile patch（含 `toolCallTimeoutMs`），完整 YAML 见 `docs/mcp/mcp-setup.md` §6.1；下面为其他客户端示例。
+
 ```json
-// DSH / Cursor / 通用 Streamable HTTP
+// Cursor / 通用 Streamable HTTP
 { "mcpServers": { "article-studio": { "url": "http://127.0.0.1:8000/mcp/" } } }
 ```
 
@@ -89,9 +91,18 @@ cd backend
 uv run pytest -p no:cacheprovider
 ```
 
-预期：`150 passed`（2 条既有依赖告警，不影响）。
+预期：`159 passed`（2 条既有依赖告警，不影响；含 MCP 设置页 API 用例）。
 
 > 已知环境抖动：`test_wenyan_client.py::test_render_markdown_real_node_integration` 依赖 node 冷启动，机器负载高时可能超过 30s 超时导致全量偶发 1 条失败；单跑该用例复跑可稳定通过，属环境抖动而非功能缺陷。若遇到，先单跑复验再判定 AT-03。
+
+### AT-04 MCP 设置 API 与热生效
+
+```powershell
+cd backend
+uv run pytest tests/test_settings.py -p no:cacheprovider -q
+```
+
+预期：覆盖空 Token 规范化、状态来源/掩码、PATCH/清除/reveal、revision 冲突、Hosts 校验、运行中任务可保存、probe、热生效（启用后 `/mcp` 200/401/404），全部通过。
 
 ## 4. 手工验收用例
 
@@ -155,6 +166,19 @@ uv run pytest -p no:cacheprovider
 | MT-26 | 无改动代码 | `cd backend; uv run pytest -p no:cacheprovider`；`cd frontend; pnpm test; pnpm lint; pnpm build` | 后端 150 passed；前端测试/lint/build 通过 |
 | MT-27 | 默认关闭 MCP 启动真实后端 | 访问 `/api/health` 与网页主路径 | REST/网页正常；`/mcp/` 404（默认不暴露） |
 
+### G. MCP 设置页（2026-10-19 新增）
+
+| 编号 | 前置 | 操作步骤 | 预期结果 |
+|---|---|---|---|
+| MT-28 | 后端已启动（fake 或真实） | 打开 `/settings?tab=mcp` | 看到「MCP 配置」Tab、状态卡（端点/传输/16 工具/来源）、服务开关、鉴权、Hosts、等待时间、DSH 片段 |
+| MT-29 | MT-28 | 开启服务并保存；不重启，调用 `/mcp/` initialize；再关闭并保存后调用 | 开启后 initialize 成功；关闭后 `/mcp/` 返回 404；保存后无需重启 |
+| MT-30 | 空 `MCP_AUTH_TOKEN=` | 页面确认鉴权关闭；标准客户端连接 | 鉴权显示未启用，客户端无需 Token 即可 initialize（空 Token 不再启用鉴权） |
+| MT-31 | MT-28 | 开启鉴权 + 填/生成 Token 并保存；用无 Token 与正确 Token 的客户端分别连接 | 无 Token 401，正确 Token initialize 成功；状态仅显示 Token 掩码，眼睛可查看 runtime Token，`.env` Token 不可查看 |
+| MT-32 | MT-28 | 修改 Allowed Hosts（含非法项）保存；再改合法值/等待时间保存 | 非法 Hosts 返回 422；合法值保存后状态与来源更新；等待时间持久化 |
+| MT-33 | 两个浏览器标签打开设置页 | 标签 A 保存后，标签 B 用旧 revision 保存；再清除 Token | B 返回 409 冲突并提示刷新；清除 Token 后回退 `.env`（无 `.env` Token 时需先关鉴权） |
+| MT-34 | MT-28 | 查看并复制 DSH YAML 片段 | 片段含端点、`toolCallTimeoutMs`（鉴权开启时含 `Authorization` 占位）；复制成功；不会自动修改 `~/.dsh` |
+| MT-35 | MT-28 | 点击「测试配置」 | 配置级返回（开启状态、16 工具、鉴权状态），不发起真实网络请求/不校验 Token 有效性 |
+
 ## 5. 验收执行记录
 
 | 用例 | 结果（通过/不通过） | 证据 / 现象 | 执行人 | 日期 |
@@ -166,6 +190,7 @@ uv run pytest -p no:cacheprovider
 | MT-16 ~ MT-19 |  |  |  |  |
 | MT-20 ~ MT-23 |  |  |  |  |
 | MT-24 ~ MT-27 |  |  |  |  |
+| MT-28 ~ MT-35 |  |  |  |  |
 
 **验收结论**：☐ 通过（可合并 `feature/T021-article-studio-mcp` 到 `main`）　☐ 不通过（需返工，问题记录：）
 
@@ -174,7 +199,7 @@ uv run pytest -p no:cacheprovider
 ## 6. 通过判据
 
 - §3 自动化用例全部通过（AI 已跑）。
-- §4 手工用例 MT-01 ~ MT-22、MT-24 ~ MT-27 通过；MT-23（真实公众号草稿）可单独确认是否本次执行。
+- §4 手工用例 MT-01 ~ MT-22、MT-24 ~ MT-35 通过；MT-23（真实公众号草稿）可单独确认是否本次执行。
 - 无密钥/凭据出现在工具返回、日志、错误信息或发布记录中。
 - MCP 关闭时 REST/网页行为不变；开启时网页可见 MCP 产物。
 - 验收记录与结论已填写。

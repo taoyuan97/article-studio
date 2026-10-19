@@ -12,7 +12,8 @@
 ## 0. 结论先行
 
 - Article Studio 的 MCP Server 随后端进程运行，使用 **Streamable HTTP**，端点为 `http://127.0.0.1:8000/mcp/`（兼容不带尾斜杠的 `/mcp`）。
-- **默认关闭**：`backend/.env` 设置 `MCP_ENABLED=true` 并重启后端才可用；关闭时 `/mcp*` 返回 404。
+- **推荐在网页「设置 > MCP 配置」Tab 配置**：开启/关闭、Bearer 鉴权与 Token、Allowed Hosts、生成工具等待时间，保存即生效，无需重启；页面覆盖优先于 `.env`。
+- **默认关闭**：页面开启或 `backend/.env` 设置 `MCP_ENABLED=true` 并重启后端才可用；关闭时 `/mcp*` 返回 404。
 - 配置成功 = 客户端 `initialize` 成功 + 列出 **16 个工具** + `studio_status` 返回预期状态 +（可选）全链路冒烟通过。
 - 仅有支持 Streamable HTTP 的客户端可直接接入；仅支持 stdio 的客户端用 `mcp-remote` 桥接（见 §6.4）。
 
@@ -43,6 +44,8 @@ MCP 只依赖后端进程与数据目录，**不要求前端 dev server 运行**
 
 ## 3. 前置检查
 
+> 以下命令默认在**仓库根目录**（`C:\projects\studio\article-studio`）执行；若已 `cd backend`，请先回到仓库根，避免 `backend\backend` 路径错误。
+
 ```powershell
 # 1) 仓库与分支
 git status --short                 # 期望无输出；有改动先由人确认处置
@@ -54,8 +57,9 @@ Test-Path backend\.env
 # 3) 默认语言模型是否已配置（只看键是否存在，不打印密钥）
 Select-String -Path backend\.env -Pattern '^(DEFAULT_LLM_PROVIDER|DEEPSEEK_MODEL|MOONSHOT_MODEL|DEEPSEEK_CONTEXT_WINDOW|MOONSHOT_CONTEXT_WINDOW)='
 
-# 4) 端口占用（有输出说明已有进程，确认归属后再决定复用）
+# 4) 端口占用（无输出=空闲；Get-NetTCPConnection 不可用时用 netstat 兜底）
 Get-NetTCPConnection -State Listen -LocalPort 8000,5173 -ErrorAction SilentlyContinue
+netstat -ano | Select-String ':8000|:5173'
 
 # 5) 依赖是否就绪
 Test-Path backend\.venv
@@ -74,21 +78,38 @@ Get-Command wenyan-mcp -ErrorAction SilentlyContinue
 
 ---
 
-## 4. 后端配置（`backend/.env`）
+## 4. MCP 配置
 
-### 4.1 变量
+### 4.1 设置页（推荐）
+
+启动前后端后打开 `http://localhost:5173/settings?tab=mcp`：
+
+1. **服务开关**：开启需二次确认（提示仅监听 127.0.0.1）；关闭时 `/mcp*` 返回 404。
+2. **Bearer 鉴权**：独立开关 + Token 输入；Token 留空表示不启用，启用鉴权必须填写非空 Token。可点“生成随机”填充（`as_...`），保存后只显示掩码，可点眼睛查看（仅浏览器保存的值，来自 `.env` 的 Token 不可查看）。
+3. **Allowed Hosts**：精确主机名，逗号或换行分隔，忽略端口，最多 20 条，不支持通配/IP 段；默认 `127.0.0.1,localhost,::1`，可“恢复本机默认”。
+4. **生成工具默认等待（秒）**：30–600；对应生成类工具未显式传 `timeout_seconds` 时的等待上限。
+5. **保存**：保存后**下一次 MCP 请求即生效**，无需重启；页面覆盖优先于 `.env`。
+6. **测试配置**：配置级自检（开启状态、16 个工具、Hosts/Token 状态），不发起网络请求。
+7. **清除 Token**：清除浏览器保存的 Token，回退到 `.env`；如 `.env` 也没有 Token，需同时关闭鉴权开关。
+8. **DSH 接入片段**：页面展示可复制的 profile patch YAML（含 `toolCallTimeoutMs`），不会自动写入 `~/.dsh`。
+
+> 页面配置保存在 `DATA_DIR/settings.json`（明文，含 Token 时请保护本机文件权限）；`.env` 是只读基线，修改 `.env` 后仍需重启后端。
+> 保存后已连接客户端的 Token/Host 变化会立即 401/403，属预期。
+
+### 4.2 `.env` 兜底（无浏览器 / 首次启动）
 
 | 变量 | 默认 | 推荐值 | 说明 |
 |---|---|---|---|
 | `MCP_ENABLED` | `false` | `true` | 是否挂载 `/mcp/`；关闭时 404 |
-| `MCP_AUTH_TOKEN` | 空 | 跨机访问时设置 | 设置后客户端必须带 `Authorization: Bearer <token>` |
-| `MCP_ALLOWED_HOSTS` | `127.0.0.1,localhost,::1` | 保持默认 | Host/Origin 白名单，逗号分隔、忽略端口 |
+| `MCP_AUTH_ENABLED` | 未设置=按 Token 自动判断 | 设置 Token 时 `true` | 显式鉴权开关；设为 `false` 可关闭鉴权 |
+| `MCP_AUTH_TOKEN` | 空 | 启用鉴权时必填 | 空白值会被当作未设置，不会启用空 Token |
+| `MCP_ALLOWED_HOSTS` | `127.0.0.1,localhost,::1` | 保持默认 | 精确 Host/Origin 白名单，逗号分隔、忽略端口；空白回退默认 |
 | `MCP_WAIT_TIMEOUT_SECONDS` | `180` | `180`（长文可调大） | 生成工具默认等待秒数；超时返回 running，可 `wait_for_run` 续等 |
 
 > 注意：后端从**启动时的工作目录**读取 `.env`（`Settings(env_file=".env")`）。必须 `cd backend` 后再启动，否则配置不会生效。
-> `MCP_*` 只从 `.env` 读取，设置页不覆盖；改完必须重启后端。
+> 只设置 `MCP_AUTH_TOKEN` 而不设置 `MCP_AUTH_ENABLED` 时会自动启用鉴权；显式 `MCP_AUTH_ENABLED=true` 但 Token 为空会让配置校验失败（避免“空 Token 鉴权”）。
 
-### 4.2 安全写入（PowerShell，保留其他配置）
+### 4.3 安全写入 `.env`（PowerShell，兜底场景）
 
 ```powershell
 cd C:\projects\studio\article-studio
@@ -113,18 +134,21 @@ $lines = Set-EnvValue $lines "MCP_ENABLED" "true"
 $lines = Set-EnvValue $lines "MCP_ALLOWED_HOSTS" "127.0.0.1,localhost,::1"
 $lines = Set-EnvValue $lines "MCP_WAIT_TIMEOUT_SECONDS" "180"
 # 需要鉴权时再设置（值不要贴进对话/日志）：
+# $lines = Set-EnvValue $lines "MCP_AUTH_ENABLED" "true"
 # $lines = Set-EnvValue $lines "MCP_AUTH_TOKEN" "<token>"
 
 [System.IO.File]::WriteAllLines($resolved, $lines, (New-Object System.Text.UTF8Encoding($false)))
 ```
 
-验证（不打印值）：
+验证（不打印值；空值会显示 `<set>`，需人工确认非空）：
 
 ```powershell
 Select-String -Path backend\.env -Pattern '^MCP_' | ForEach-Object { ($_.Line -split '=',2)[0] + '=<set>' }
 ```
 
-### 4.3 fake 环境无需改 `.env`
+> `backend/.env.bak` 已被 `.gitignore` 忽略，但备份包含明文凭据：确认配置成功后建议删除，避免误同步/误分享。
+
+### 4.4 fake 环境无需改 `.env`
 
 `dev_fake_server.py` 自行构造 Settings（`_env_file=None`），默认 `MCP_ENABLED=true`、fake 发布、假凭据；适合先跑通配置再切真实环境。
 
@@ -135,14 +159,16 @@ Select-String -Path backend\.env -Pattern '^MCP_' | ForEach-Object { ($_.Line -s
 ### 5.1 启动
 
 ```powershell
-cd backend
+cd C:\projects\studio\article-studio\backend
 
-# 真实环境（开发）
-uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+# 真实环境（稳定启动；--reload 只用于代码开发，不会热加载 .env）
+uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
 
 # 或：fake 环境（数据隔离，不消耗真实额度）
 uv run python scripts/dev_fake_server.py --port 8000 --data-dir data/mcp-config-check
 ```
+
+> 生效方式：设置页保存 MCP 配置**无需重启**；手工修改 `.env` 必须重启（`--reload` 只监听 `.py`，不监听 `.env`）。
 
 健康检查：
 
@@ -153,7 +179,7 @@ Invoke-RestMethod http://127.0.0.1:8000/api/health    # 期望 status = ok
 ### 5.2 MCP 自检（推荐，只读、不生成内容）
 
 ```powershell
-cd backend
+cd C:\projects\studio\article-studio\backend
 uv run python scripts/mcp_selftest.py --url http://127.0.0.1:8000/mcp/
 
 # 配置了 Token 时
@@ -176,7 +202,7 @@ uv run python scripts/mcp_selftest.py --url http://127.0.0.1:8000/mcp/ --json
 仅在 fake 环境推荐执行（会生成文章/图片并 fake 发布）：
 
 ```powershell
-cd backend
+cd C:\projects\studio\article-studio\backend
 uv run python scripts/mcp_smoke.py --url http://127.0.0.1:8000/mcp/
 ```
 
@@ -190,19 +216,26 @@ uv run python scripts/mcp_smoke.py --url http://127.0.0.1:8000/mcp/
 
 ### 6.1 DSH
 
-在 MCP / 能力配置中注册 Streamable HTTP 服务（等价配置）：
+DSH 的 MCP 配置在 **profile patch YAML**（不是扁平 JSON）：编辑
+`~/.dsh/profiles/desktop/cordis.patch.yml`，在顶层数组追加：
 
-```json
-{
-  "name": "article-studio",
-  "transport": "streamable-http",
-  "url": "http://127.0.0.1:8000/mcp/",
-  "headers": { "Authorization": "Bearer <token>" }
-}
+```yaml
+- insert:
+    - id: mcp-article-studio
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: article-studio
+        transport: streamable-http
+        url: http://127.0.0.1:8000/mcp/
+        headers:
+          Authorization: "Bearer <token>"   # 未启用鉴权时删除 headers
+        toolCallTimeoutMs: 300000
 ```
 
-- 未设置 `MCP_AUTH_TOKEN` 时去掉 `headers`。
-- 注册后确认工具列表为 16 个；若客户端需要显式"启用/连接"，连接后调用 `studio_status` 验证。
+- **必须显式设置 `toolCallTimeoutMs`**：文章生成可能需要 30–180s，DSH 客户端默认工具超时可能更短；建议 `300000`（5 分钟）以上，否则 `generate_article` 会在客户端侧超时。
+- 未启用鉴权时删除 `headers`；Token 只写在本机用户目录，不要提交仓库。
+- 保存后重启 DSH / 重新加载 profile；确认工具列表 16 个，再调用 `studio_status`。
+- 若所用 DSH 版本只提供“能力/ MCP”UI 注册：按 HTTP Server 填写 `serverName=article-studio`、`url=http://127.0.0.1:8000/mcp/`、Header `Authorization: Bearer <token>`；UI 可能不暴露超时项，长任务仍建议用上述 profile patch 配置 `toolCallTimeoutMs`。
 
 ### 6.2 Claude Code
 
@@ -289,12 +322,12 @@ claude mcp list
 
 | 现象 | 原因 | 处理 |
 |---|---|---|
-| `[HTTP 404] MCP_DISABLED` | `MCP_ENABLED` 未开或未重启；或 `.env` 未生效（工作目录错误） | 设 `MCP_ENABLED=true`；从 `backend` 目录重启 |
-| `[HTTP 401]` | 设置了 `MCP_AUTH_TOKEN`，客户端未带/带错 | 客户端加 `Authorization: Bearer <token>`，核对值 |
+| `[HTTP 404] MCP_DISABLED` | 页面/`.env` 未开或未重启；或 `.env` 未生效（工作目录错误） | 在设置页 MCP Tab 开启；或设 `MCP_ENABLED=true` 并从 `backend` 目录重启 |
+| `[HTTP 401]` | 已启用鉴权但客户端未带/带错 Token；或旧版本空 Token 缺陷 | 设置页确认“Bearer 鉴权”开关与 Token；客户端加 `Authorization: Bearer <token>`；空 Token 已不再启用鉴权 |
 | `[HTTP 403] MCP_HOST_FORBIDDEN` | Host 不在 `MCP_ALLOWED_HOSTS` | 用 `127.0.0.1`/`localhost`，或把实际主机名加入白名单 |
 | `[HTTP 403] MCP_ORIGIN_FORBIDDEN` | 浏览器/客户端带非白名单 Origin | 用本地 MCP 客户端或把 Origin 主机加入白名单 |
 | `无法连接后端` | 后端未启动、端口错、防火墙/代理 | `Invoke-RestMethod http://127.0.0.1:8000/api/health`；检查端口占用 |
-| 自检超时 | 后端卡住/端口被别的进程占用 | 查 `Get-NetTCPConnection` 与 `backend/data/logs/app.log` |
+| 自检超时 | 后端卡住/端口被别的进程占用 | 查 `Get-NetTCPConnection`（不可用则 `netstat -ano | findstr :8000`）与 `backend/data/logs/app.log` |
 | 工具数不是 16 | 旧后端进程仍在跑旧代码 | 停掉旧进程（检查命令行），重启当前代码 |
 | `MODEL_NOT_CONFIGURED` | 默认 LLM 未配置完整 | 设置页补齐 Key/模型/上下文窗口 |
 | `IMAGE_PROVIDER_NOT_CONFIGURED` | 未配置生图 provider | 设置页配置通义万相，或改用 fake 环境 |
@@ -303,7 +336,7 @@ claude mcp list
 | `PUBLISH_MCP_ERROR`（含 40164） | 公众号 IP 白名单、AppSecret、封面缺失等 | 查看工具返回原文与发布记录错误详情；核对白名单与封面 |
 | `ARTICLE_RUN_ACTIVE` | 同文章已有运行中任务 | 等完成或换文章；客户端断开不会取消后台运行 |
 | 生成工具超时返回 `running` | 客户端读超时短于生成耗时 | 调大客户端超时；或用返回的 `run_id` 调 `wait_for_run` |
-| `.env` 改了不生效 | 从错误目录启动、未重启、或以为设置页能改 MCP 开关 | `cd backend` 启动；改完重启；MCP_* 只读 `.env` |
+| `.env` 改了不生效 | 从错误目录启动、未重启；或页面覆盖优先 | 从 `backend` 启动；`.env` 修改需重启；设置页配置优先，清除覆盖后回退 `.env` |
 | 中文/符号输出乱码 | Windows 控制台编码 | 脚本已自动 `UTF-8`；终端执行前可 `$env:PYTHONIOENCODING='utf-8'` |
 
 诊断顺序建议：`health` → `selftest` → 后端日志 `backend/data/logs/app.log` → 端口/进程命令行 → 客户端配置 → `.env`。
@@ -313,6 +346,8 @@ claude mcp list
 ## 9. 安全与边界
 
 - MCP 默认关闭；仅监听 `127.0.0.1` 时不对局域网暴露。**不要把开启 MCP 的未鉴权服务绑定到 `0.0.0.0`**。
+- 设置页保存即生效（无需重启）；`.env` 修改仍需重启；页面覆盖优先，清除后回退 `.env`。
+- 设置页 Token 与覆盖值保存在 `DATA_DIR/settings.json`（明文），仅限可信本机；页面只显示 `.env` Token 掩码，浏览器保存的 Token 可按需查看/清除。
 - 跨机访问至少设置 `MCP_AUTH_TOKEN`，并用 `MCP_ALLOWED_HOSTS` 限定来源；仍建议叠加网络隔离。
 - 工具与错误信息会脱敏，不返回密钥；公众号只返回掩码。
 - 不提供文章/素材/发布记录删除工具；`publish_article` 只建草稿、不群发。
@@ -355,3 +390,4 @@ claude mcp list
 ## 12. 变更记录
 
 - 2026-10-19 初版：按 T021 实现整理 MCP 配置工作流（后端开关 → 自检 → 客户端注册 → 验收 → 排障），配套只读自检脚本 `mcp_selftest.py`，供 AI agent 按步骤执行并汇报。
+- 2026-10-19 更新：设置页「MCP 配置」Tab 成为推荐入口（保存热生效、显式鉴权开关、随机 Token、Hosts/等待时间、配置自检、DSH YAML）；`.env` 降级为兜底；补 DSH profile patch/`toolCallTimeoutMs`、CWD 与 401 排障。
