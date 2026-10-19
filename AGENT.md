@@ -53,7 +53,7 @@ article-studio/
 3. **[docs/tech/tech-design.md](docs/tech/tech-design.md)**——架构、API/SSE 契约、存储与关键决策
 4. **[docs/prd/prd.md](docs/prd/prd.md)**——产品功能与验收口径
 5. **当前任务单** `docs/task/TNNN-*.md`——目标、已确认决策、范围、验收分层
-6. 按需：`README.md` / `backend/README.md` / `frontend/README.md` / `docs/ops/`
+6. 按需：`README.md` / `backend/README.md` / `frontend/README.md` / `docs/mcp/mcp-setup.md` / `docs/ops/`
 
 ---
 
@@ -145,6 +145,8 @@ pnpm 通过 corepack 使用；无全局 pnpm 时见 [README.md](README.md) 快�
 |---|---|
 | [docs/git/branch-workflow.md](docs/git/branch-workflow.md) | 分支管理唯一事实源：硬规则、流程、命名、钩子、合并、保护现状 |
 | [docs/task/](docs/task/) | 当前任务单（TNNN）与状态机 |
+| [docs/mcp/mcp-setup.md](docs/mcp/mcp-setup.md) | MCP 配置工作流：开启、自检、客户端注册、验收、排障 |
+| [docs/test/](docs/test/) | 验收测试用例与执行记录 |
 | [docs/version/](docs/version/) | 历史版本任务与 issue 归档 |
 | [docs/tech/tech-design.md](docs/tech/tech-design.md) | 技术设计、API/SSE 契约、MCP 架构 |
 | [docs/prd/prd.md](docs/prd/prd.md) | 产品需求与验收标准 |

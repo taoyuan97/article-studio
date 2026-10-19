@@ -245,8 +245,8 @@ FastAPI 同进程（单进程、单数据源）
 - 修改 `backend/app/database.py`：新增 `create_imported_version()`（定稿导入合成 completed run + 消息 + 版本）与 `get_version_by_run_id()`。
 - 修改 `backend/article_agent/config.py` / `backend/.env.example`：`MCP_ENABLED`、`MCP_AUTH_TOKEN`、`MCP_ALLOWED_HOSTS`、`MCP_WAIT_TIMEOUT_SECONDS`。
 - 修改 `backend/scripts/dev_fake_server.py`：fake 联调默认开启 MCP。
-- 新增 `backend/tests/test_mcp_server.py`、`backend/scripts/mcp_smoke.py`。
-- 文档：本任务单、`README.md`、`backend/README.md`、`docs/tech/tech-design.md`、`docs/ops/manual-mcp-clients.md`（本地手册）。
+- 新增 `backend/tests/test_mcp_server.py`、`backend/scripts/mcp_smoke.py`、`backend/scripts/mcp_selftest.py`（只读配置自检）。
+- 文档：本任务单、`README.md`、`backend/README.md`、`docs/tech/tech-design.md`、`docs/mcp/mcp-setup.md`、`docs/test/T021-mcp-acceptance.md`、`docs/ops/manual-mcp-clients.md`（本地手册）。
 
 ### 13.2 与计划的偏差
 
@@ -259,6 +259,7 @@ FastAPI 同进程（单进程、单数据源）
 - 后端全量：`.venv\Scripts\python.exe -m pytest -p no:cacheprovider` → **150 passed, 2 warnings in 29.08s**（含既有 node 渲染集成用例；该用例在首轮全量中因 node 冷启动超时一次，单跑与复跑均通过）。
 - MCP 专项：`tests/test_mcp_server.py` → **8 passed**，覆盖：工具注册/关闭 404、HTTP 挂载（`/mcp` 与 `/mcp/`）、Bearer 401/通过、Host 403、内存 ClientSession 全链路（生成→配图→方案→预览→真实主题渲染→fake 发布→记录）、定稿导入版本递增、超时返回 running 后 `wait_for_run` 续等、结构化错误。
 - 人工冒烟（fake 服务，不消耗真实额度）：`dev_fake_server.py` + `mcp_smoke.py` 完整跑通；生成文章 v1 → 3 张不同比例配图自动入库 → 组装 6 块/3 插图 → 真实 `@wenyan-md/core` 渲染 2180 字符 HTML → fake 发布 `FAKE_MEDIA_9f38e828` → 发布记录查询成功；另验证不带尾斜杠的 `/mcp` 端点可用。
+- 配置自检脚本：`scripts/mcp_selftest.py` 在 fake 服务（8001）返回 16 工具与 `studio_status` 摘要、退出码 0；对 MCP 关闭的后端正确输出 `[HTTP 404] MCP 未开启…` 诊断并以退出码 1 结束（未触碰运行中的真实后端进程）。
 - 数据可见性（API 层）：`GET /api/articles` 可见 MCP 产出的文章与版本数；`GET /api/publish/records` 可见成功记录。
 - `git diff --check` 通过。
 

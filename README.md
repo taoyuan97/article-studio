@@ -351,6 +351,8 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
 | `docs/prd/prd.md`          | 产品需求与验收标准                                |
 | `docs/tech/tech-design.md` | 技术设计（架构、数据流、上下文预算）              |
 | `docs/task/`               | 任务拆分 T021（MCP Server）等实施任务              |
+| `docs/mcp/mcp-setup.md`    | MCP 配置工作流（开启、自检、客户端注册、排障）    |
+| `docs/test/`               | 验收测试用例与执行记录                            |
 | `docs/ops/`                | 人工操作手册（真实 API 走查、E2E 手册、MCP 接入手册、故障排查） |
 | `backend/README.md`        | 后端 API 契约、启动方式、假模型约定               |
 | `frontend/README.md`       | 前端结构、命令、与后端的契约                      |
