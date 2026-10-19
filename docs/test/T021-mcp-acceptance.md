@@ -91,7 +91,7 @@ cd backend
 uv run pytest -p no:cacheprovider
 ```
 
-预期：`159 passed`（2 条既有依赖告警，不影响；含 MCP 设置页 API 用例）。
+预期：`163 passed`（2 条既有依赖告警，不影响；含 MCP 设置页 API 与预览 frontmatter 回归用例）。
 
 > 已知环境抖动：`test_wenyan_client.py::test_render_markdown_real_node_integration` 依赖 node 冷启动，机器负载高时可能超过 30s 超时导致全量偶发 1 条失败；单跑该用例复跑可稳定通过，属环境抖动而非功能缺陷。若遇到，先单跑复验再判定 AT-03。
 
@@ -103,6 +103,15 @@ uv run pytest tests/test_settings.py -p no:cacheprovider -q
 ```
 
 预期：覆盖空 Token 规范化、状态来源/掩码、PATCH/清除/reveal、revision 冲突、Hosts 校验、运行中任务可保存、probe、热生效（启用后 `/mcp` 200/401/404），全部通过。
+
+### AT-05 主题预览 frontmatter 回归（ISSUE-004）
+
+```powershell
+cd backend
+uv run pytest tests/test_wenyan_client.py tests/test_wenyan_render_script.py -p no:cacheprovider -q
+```
+
+预期：全部通过。覆盖真实 core 预览「frontmatter 不进入正文 + description 引用块」，以及 fake wrapper 断言预览脚本走 `prepareRenderContext`、`image_list`/旧 core 明确报错。
 
 ## 4. 手工验收用例
 
@@ -145,7 +154,7 @@ uv run pytest tests/test_settings.py -p no:cacheprovider -q
 |---|---|---|---|
 | MT-16 | fake 或真实环境 | 调 `list_publish_themes` | fake 返回 8 个内置主题；真实环境返回 wenyan 主题列表（含 `default`） |
 | MT-17 | MT-13 | 调 `preview_publish(article_id, image_placements=[{asset_id, position:"after_block_2"}], cover_asset_id=asset_id, author="验收")` | 返回 `blocks`（含 index/kind/preview/text）、`markdown`（`---` frontmatter + 正文插图）；插图出现在第 2 块后 |
-| MT-18 | MT-17 | 调 `render_publish_preview(..., theme_id="default")`，再换 `theme_id="orangeheart"` | 均返回 `html`；两次 HTML 样式不同；HTML 内不含本地绝对路径 |
+| MT-18 | MT-17 | 调 `render_publish_preview(..., theme_id="default")`，再换 `theme_id="orangeheart"` | 均返回 `html`；两次 HTML 样式不同；HTML 不含 frontmatter 字段文本（`title:`/`cover:`/`author:`），`description` 按发布语义渲染为引用块；HTML 内不含本地绝对路径 |
 | MT-19 | MT-17 | 调 `preview_publish`，`position="middle"` 或 `after_block_999` | `middle` → `INVALID_ARGUMENT`；越界 → `PUBLISH_PLACEMENT_INVALID` |
 
 ### E. 发布
@@ -183,7 +192,7 @@ uv run pytest tests/test_settings.py -p no:cacheprovider -q
 
 | 用例 | 结果（通过/不通过） | 证据 / 现象 | 执行人 | 日期 |
 |---|---|---|---|---|
-| AT-01 ~ AT-03 |  |  |  |  |
+| AT-01 ~ AT-05 |  |  |  |  |
 | MT-01 ~ MT-05 |  |  |  |  |
 | MT-06 ~ MT-12 |  |  |  |  |
 | MT-13 ~ MT-15b |  |  |  |  |
