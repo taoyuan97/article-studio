@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from pathlib import Path
 from typing import Any, Literal
@@ -15,6 +16,7 @@ from article_agent.config import Settings
 from article_agent.image_providers import ImageProviderRegistry, resolve_image_size
 from article_agent.registry import ModelRegistry
 
+from .mcp.constants import MCP_TOOL_COUNT
 from .security import redact_sensitive, require_local_origin
 from .settings_store import SettingsRevisionConflictError, SettingsStore
 from .wenyan_client import WenyanMcpClient
@@ -90,6 +92,18 @@ class RuntimeUpdate(RevisionRequest):
 class WechatUpdate(RevisionRequest):
     app_id: str | None = None
     app_secret: str | None = None
+
+
+class McpUpdate(RevisionRequest):
+    enabled: bool | None = None
+    auth_enabled: bool | None = None
+    auth_token: str | None = None
+    allowed_hosts: list[str] | None = None
+    wait_timeout_seconds: float | None = Field(default=None, gt=0, le=600)
+
+
+class McpCredentialRevealRequest(RevisionRequest):
+    field: Literal["auth_token"] = "auth_token"
 
 
 def _store(request: Request) -> SettingsStore:
@@ -173,6 +187,70 @@ def _wechat_status(store: SettingsStore, request: Request) -> dict[str, Any]:
     }
 
 
+_MCP_HOST_PATTERN = re.compile(r"^[a-z0-9.\-:\[\]]+$")
+
+
+def _validate_mcp_hosts(values: list[str]) -> list[str]:
+    """Validate the exact-hostname allowlist (ports ignored, no wildcards)."""
+
+    hosts: list[str] = []
+    for raw in values:
+        host = str(raw).strip().lower()
+        if not host:
+            continue
+        if len(host) > 253 or not _MCP_HOST_PATTERN.match(host):
+            raise ValueError(f"MCP_ALLOWED_HOSTS 包含非法主机名：{raw}")
+        if host in {"*", "0.0.0.0", "::"}:
+            raise ValueError(f"MCP_ALLOWED_HOSTS 不支持该主机名：{raw}")
+        if host not in hosts:
+            hosts.append(host)
+    if not hosts:
+        raise ValueError("MCP_ALLOWED_HOSTS 不能为空；恢复默认请使用默认值")
+    if len(hosts) > 20:
+        raise ValueError("MCP_ALLOWED_HOSTS 最多 20 条")
+    return hosts
+
+
+def _mcp_status(store: SettingsStore, request: Request) -> dict[str, Any]:
+    settings = store.current
+    token = settings.mcp_auth_token
+    token_value = token.get_secret_value() if token is not None else ""
+    hosts = [
+        item.strip()
+        for item in settings.mcp_allowed_hosts.split(",")
+        if item.strip()
+    ]
+    auth_runtime = store.has_override("mcp_auth_enabled") or store.has_override(
+        "mcp_auth_token"
+    )
+    return {
+        "enabled": settings.mcp_enabled,
+        "enabled_source": (
+            "runtime" if store.has_override("mcp_enabled") else "env"
+        ),
+        "endpoint": str(request.base_url).rstrip("/") + "/mcp/",
+        "transport": "streamable-http",
+        "tool_count": MCP_TOOL_COUNT,
+        "auth": {
+            "enabled": bool(settings.mcp_auth_enabled),
+            "enabled_source": "runtime" if auth_runtime else "env",
+            "token_masked": _mask(token_value) if token_value else None,
+            "token_source": store.credential_source("mcp"),
+            "runtime_token": store.has_override("mcp_auth_token"),
+        },
+        "allowed_hosts": hosts,
+        "allowed_hosts_source": (
+            "runtime" if store.has_override("mcp_allowed_hosts") else "env"
+        ),
+        "wait_timeout_seconds": settings.mcp_wait_timeout_seconds,
+        "wait_timeout_source": (
+            "runtime"
+            if store.has_override("mcp_wait_timeout_seconds")
+            else "env"
+        ),
+    }
+
+
 def status_payload(request: Request) -> dict[str, Any]:
     store = _store(request)
     settings = store.current
@@ -193,6 +271,7 @@ def status_payload(request: Request) -> dict[str, Any]:
             field: getattr(settings, field) for field in SettingsStore.RUNTIME_FIELDS
         },
         "wechat": _wechat_status(store, request),
+        "mcp": _mcp_status(store, request),
     }
 
 
@@ -261,6 +340,7 @@ def _all_secrets(settings: Settings) -> list[str]:
             settings.dreamina_api_key,
             settings.wechat_app_id,
             settings.wechat_app_secret,
+            settings.mcp_auth_token,
         )
         if _plain(value)
     ]
@@ -342,6 +422,35 @@ async def _commit_wechat_change(
             _store(request).commit(candidate, expected_revision=revision)
             request.app.state.settings = settings
             request.app.state.wenyan_client = client
+            secrets = _all_secrets(settings)
+            request.app.state.secret_values = secrets
+            request.app.state.manager.secret_values = secrets
+            request.app.state.image_manager.secret_values = secrets
+    except Exception as exc:
+        raise _settings_error(exc) from None
+
+
+async def _commit_mcp_change(
+    request: Request,
+    values: dict[str, Any],
+    *,
+    revision: int,
+    remove: tuple[str, ...] = (),
+) -> None:
+    """Persist MCP overrides and hot-apply them (next /mcp request sees them).
+
+    Unlike model settings this does not rebuild agents or block active runs:
+    the guard reads ``app.state.settings`` per request, and MCP switches never
+    interrupt an in-flight article/image run.
+    """
+
+    try:
+        async with request.app.state.configuration_lock:
+            candidate, settings = _store(request).prepare(
+                values, expected_revision=revision, remove=remove
+            )
+            _store(request).commit(candidate, expected_revision=revision)
+            request.app.state.settings = settings
             secrets = _all_secrets(settings)
             request.app.state.secret_values = secrets
             request.app.state.manager.secret_values = secrets
@@ -490,14 +599,98 @@ def reveal_wechat_credential(
     return {"revision": _store(request).revision, "field": payload.field, "value": value}
 
 
+@router.patch("/mcp")
+async def update_mcp(payload: McpUpdate, request: Request):
+    require_local_origin(request)
+    try:
+        values: dict[str, Any] = {}
+        if payload.enabled is not None:
+            values["mcp_enabled"] = payload.enabled
+        if payload.auth_enabled is not None:
+            values["mcp_auth_enabled"] = payload.auth_enabled
+        if payload.auth_token is not None:
+            token = payload.auth_token.strip()
+            if not token:
+                raise ValueError(
+                    "Token 不能为空；关闭鉴权请使用开关，清除请使用清除操作"
+                )
+            if len(token) > 256:
+                raise ValueError("Token 长度不能超过 256")
+            values["mcp_auth_token"] = token
+            if payload.auth_enabled is None:
+                # Supplying a token implies enabling auth unless explicitly told otherwise.
+                values["mcp_auth_enabled"] = True
+        if payload.allowed_hosts is not None:
+            values["mcp_allowed_hosts"] = ",".join(
+                _validate_mcp_hosts(payload.allowed_hosts)
+            )
+        if payload.wait_timeout_seconds is not None:
+            values["mcp_wait_timeout_seconds"] = payload.wait_timeout_seconds
+        if not values:
+            raise ValueError("没有可更新的 MCP 配置")
+    except ValueError as exc:
+        raise _settings_error(exc) from None
+    await _commit_mcp_change(request, values, revision=payload.revision)
+    return status_payload(request)
+
+
+@router.delete("/mcp/token")
+async def clear_mcp_token(payload: RevisionRequest, request: Request):
+    require_local_origin(request)
+    await _commit_mcp_change(
+        request, {}, revision=payload.revision, remove=("mcp_auth_token",)
+    )
+    return status_payload(request)
+
+
+@router.post("/mcp/token/reveal")
+def reveal_mcp_token(
+    payload: McpCredentialRevealRequest,
+    request: Request,
+    response: Response,
+):
+    require_local_origin(request)
+    try:
+        value = _store(request).reveal_override(
+            "mcp_auth_token", expected_revision=payload.revision
+        )
+    except Exception as exc:
+        raise _settings_error(exc) from None
+    response.headers["Cache-Control"] = "no-store"
+    return {
+        "revision": _store(request).revision,
+        "field": payload.field,
+        "value": value,
+    }
+
+
 @router.post("/probe/{provider}")
 async def probe_provider(provider: str, request: Request):
     require_local_origin(request)
-    if provider not in {"llm_deepseek", "llm_moonshot", "image_wanxiang", "wechat"}:
+    if provider not in {
+        "llm_deepseek",
+        "llm_moonshot",
+        "image_wanxiang",
+        "wechat",
+        "mcp",
+    }:
         raise _settings_error(ValueError("未知或暂不支持的探测项"))
     started = time.perf_counter()
     try:
-        if provider == "wechat":
+        if provider == "mcp":
+            settings = _store(request).current
+            if not settings.mcp_enabled:
+                raise ValueError("MCP 未开启：保存开启后 /mcp 才可用")
+            auth = (
+                "Bearer 鉴权已启用"
+                if settings.mcp_auth_enabled
+                else "未启用鉴权（仅 Host 白名单）"
+            )
+            message = (
+                f"MCP 配置就绪：{MCP_TOOL_COUNT} 个工具，{auth}"
+                "（配置级检查，未发起网络请求）"
+            )
+        elif provider == "wechat":
             settings = _store(request).current
             if not settings.wechat_app_id or not settings.wechat_app_secret:
                 raise ValueError("微信公众号 AppID 或 AppSecret 未配置")

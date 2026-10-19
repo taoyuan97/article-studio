@@ -54,6 +54,19 @@ class Settings(BaseSettings):
     # Fake mode: publish without spawning the MCP subprocess or real WeChat calls.
     publish_fake_mode: bool = False
 
+    # Article Studio MCP server (Streamable HTTP at /mcp/), consumed by local agents.
+    # Disabled by default: enable explicitly in backend/.env.
+    mcp_enabled: bool = False
+    # Optional bearer token; when set, every /mcp request must carry it.
+    # Blank values are normalised to None so an empty token never enables auth.
+    mcp_auth_token: SecretStr | None = None
+    # Explicit auth switch. None = infer from token presence (backwards compatible).
+    mcp_auth_enabled: bool | None = None
+    # Comma-separated hostname allowlist (ports ignored), defense in depth.
+    mcp_allowed_hosts: str = "127.0.0.1,localhost,::1"
+    # Default wait budget for MCP generation tools before returning a run handle.
+    mcp_wait_timeout_seconds: float = Field(default=180, gt=0)
+
     llm_timeout_seconds: float = Field(default=180, gt=0)
     llm_max_retries: int = Field(default=2, ge=0)
     # 推理模型的思考 token 计入输出预算，多字段结构化输出需预留充足余量
@@ -90,6 +103,30 @@ class Settings(BaseSettings):
             or not self.langsmith_api_key.get_secret_value()
         ):
             raise ValueError("LANGSMITH_API_KEY is required when tracing is enabled")
+        return self
+
+    @model_validator(mode="after")
+    def normalize_mcp_settings(self) -> "Settings":
+        """Normalise MCP options so blank values never act as real config.
+
+        An empty ``MCP_AUTH_TOKEN`` used to be parsed as ``SecretStr("")`` and
+        enabled a guessable "Bearer " check. Blank tokens are now disabled;
+        blank host lists fall back to loopback; an explicit auth switch without
+        a token is rejected at startup/save time.
+        """
+
+        if self.mcp_auth_token is not None:
+            token = self.mcp_auth_token.get_secret_value().strip()
+            self.mcp_auth_token = SecretStr(token) if token else None
+        hosts = [item.strip() for item in self.mcp_allowed_hosts.split(",") if item.strip()]
+        self.mcp_allowed_hosts = ",".join(hosts) or "127.0.0.1,localhost,::1"
+        if self.mcp_auth_enabled is None:
+            self.mcp_auth_enabled = bool(self.mcp_auth_token)
+        if self.mcp_auth_enabled and self.mcp_auth_token is None:
+            raise ValueError(
+                "MCP_AUTH_ENABLED=true 时必须配置非空 MCP_AUTH_TOKEN；"
+                "留空会关闭鉴权。"
+            )
         return self
 
     def provider(self, name: str) -> ProviderSettings:

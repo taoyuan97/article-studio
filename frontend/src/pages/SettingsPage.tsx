@@ -1,6 +1,7 @@
 import {
   CheckCircleOutlined,
   CloseCircleOutlined,
+  CopyOutlined,
   ExperimentOutlined,
   EyeOutlined,
   LockOutlined,
@@ -19,8 +20,10 @@ import {
   Select,
   Skeleton,
   Space,
+  Switch,
   Tabs,
   Tag,
+  Typography,
 } from 'antd'
 import { useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
@@ -591,9 +594,349 @@ function WechatCard({ status }: { status: SettingsStatus }) {
   )
 }
 
+function McpCard({ status }: { status: SettingsStatus }) {
+  const { message, modal } = App.useApp()
+  const refresh = useRefreshSettings()
+  const mcp = status.mcp
+  const [enabled, setEnabled] = useState(mcp.enabled)
+  const [authEnabled, setAuthEnabled] = useState(mcp.auth.enabled)
+  const [authToken, setAuthToken] = useState('')
+  const [tokenDirty, setTokenDirty] = useState(false)
+  const [tokenVisible, setTokenVisible] = useState(false)
+  const [hostsText, setHostsText] = useState(mcp.allowed_hosts.join('\n'))
+  const [waitTimeout, setWaitTimeout] = useState(mcp.wait_timeout_seconds)
+
+  const hostsDraft = hostsText
+    .split(/[\n,]/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+  const hostsChanged = hostsDraft.join(',') !== mcp.allowed_hosts.join(',')
+  const dirty =
+    enabled !== mcp.enabled ||
+    authEnabled !== mcp.auth.enabled ||
+    tokenDirty ||
+    hostsChanged ||
+    Number(waitTimeout) !== Number(mcp.wait_timeout_seconds)
+  const authNeedsToken =
+    authEnabled && (tokenDirty ? !authToken.trim() : !mcp.auth.token_masked)
+
+  const saveMutation = useMutation({
+    mutationFn: () =>
+      settingsApi.updateMcp({
+        revision: status.revision,
+        enabled,
+        auth_enabled: authEnabled,
+        ...(tokenDirty ? { auth_token: authToken.trim() } : {}),
+        allowed_hosts: hostsDraft,
+        wait_timeout_seconds: Number(waitTimeout),
+      }),
+    onSuccess: () => {
+      setAuthToken('')
+      setTokenDirty(false)
+      setTokenVisible(false)
+      refresh()
+      message.success('MCP 配置已保存，下一次 MCP 请求生效')
+    },
+    onError: (error) => {
+      refresh()
+      message.error(errorMessage(error))
+    },
+  })
+  const clearMutation = useMutation({
+    mutationFn: () => settingsApi.clearMcpToken(status.revision),
+    onSuccess: () => {
+      refresh()
+      message.success('浏览器 Token 已清除，已回退到 .env 配置')
+    },
+    onError: (error) => {
+      refresh()
+      message.error(errorMessage(error))
+    },
+  })
+  const probeMutation = useMutation({
+    mutationFn: () => settingsApi.probe('mcp'),
+    onSuccess: (result) =>
+      result.ok
+        ? message.success(`${result.message}（${result.latency_ms} ms）`)
+        : message.error(result.message),
+    onError: (error) => message.error(errorMessage(error)),
+  })
+
+  const handleEnabledChange = (next: boolean) => {
+    if (next && !mcp.enabled) {
+      modal.confirm({
+        title: '启用 MCP 服务？',
+        content:
+          '启用后本机智能体可通过 /mcp/ 调用文章工作台。请确认后端仅监听 127.0.0.1；未启用鉴权时，任何能访问该端口的客户端都可调用。',
+        okText: '启用',
+        cancelText: '取消',
+        onOk: () => setEnabled(true),
+      })
+      return
+    }
+    setEnabled(next)
+  }
+
+  const revealToken = async () => {
+    if (!mcp.auth.runtime_token) return
+    try {
+      const result = await settingsApi.revealMcpToken(status.revision)
+      setAuthToken(result.value)
+      setTokenVisible(true)
+    } catch (error) {
+      refresh()
+      message.error(`Token 查看失败：${errorMessage(error)}`)
+    }
+  }
+
+  const generateToken = () => {
+    const random =
+      typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID().replace(/-/g, '')
+        : Math.random().toString(36).slice(2)
+    setAuthToken(`as_${random}${random}`.slice(0, 64))
+    setTokenDirty(true)
+    setTokenVisible(true)
+    setAuthEnabled(true)
+  }
+
+  const copy = async (text: string, label: string) => {
+    try {
+      await navigator.clipboard.writeText(text)
+      message.success(`${label}已复制`)
+    } catch {
+      message.warning('复制失败，请手动选择')
+    }
+  }
+
+  const dshYaml = [
+    '- insert:',
+    '    - id: mcp-article-studio',
+    "      name: '@deepseek-ai/dsh-mcp-client'",
+    '      config:',
+    '        serverName: article-studio',
+    '        transport: streamable-http',
+    `        url: ${mcp.endpoint}`,
+    ...(mcp.auth.enabled
+      ? ['        headers:', '          Authorization: "Bearer <token>"']
+      : []),
+    '        toolCallTimeoutMs: 300000',
+  ].join('\n')
+
+  return (
+    <Card
+      title="MCP 服务"
+      extra={
+        enabled ? (
+          <Tag color="success" icon={<CheckCircleOutlined />}>
+            已启用
+          </Tag>
+        ) : (
+          <Tag icon={<CloseCircleOutlined />}>已关闭</Tag>
+        )
+      }
+    >
+      <Alert
+        type={mcp.enabled ? 'warning' : 'info'}
+        showIcon
+        style={{ marginBottom: 16 }}
+        message={mcp.enabled ? 'MCP 端点已开启' : 'MCP 默认关闭'}
+        description={
+          mcp.enabled
+            ? '请确认后端仅监听 127.0.0.1。修改 Token/Hosts 后已连接客户端会立即 401/403，属预期；保存无需重启后端。'
+            : '开启后本地智能体可连接 /mcp/ 调用文章工作台；建议先启用 Bearer 鉴权，再对外提供访问。'
+        }
+      />
+
+      <div className="settings-mcp-meta">
+        <div className="settings-mcp-meta-row">
+          <span>端点</span>
+          <Typography.Text code>{mcp.endpoint}</Typography.Text>
+          <Button
+            size="small"
+            icon={<CopyOutlined />}
+            onClick={() => void copy(mcp.endpoint, '端点')}
+          >
+            复制
+          </Button>
+        </div>
+        <div className="settings-mcp-meta-row">
+          <span>传输</span>
+          <Tag>{mcp.transport}</Tag>
+          <span>工具</span>
+          <Tag>{mcp.tool_count} 个</Tag>
+          <span>开关来源</span>
+          <Tag>{sourceLabel(mcp.enabled_source)}</Tag>
+        </div>
+        <div className="settings-mcp-meta-row">
+          <LockOutlined />
+          <span>{mcp.auth.token_masked ?? '未配置 Bearer Token'}</span>
+          <Tag>{sourceLabel(mcp.auth.token_source)}</Tag>
+          {mcp.auth.enabled ? <Tag color="processing">鉴权已启用</Tag> : <Tag>未鉴权</Tag>}
+        </div>
+      </div>
+
+      <Form layout="vertical" onFinish={() => saveMutation.mutate()}>
+        <Form.Item label="服务开关">
+          <Space align="center" wrap>
+            <Switch
+              checked={enabled}
+              onChange={handleEnabledChange}
+              aria-label="启用 MCP 服务"
+            />
+            <span>{enabled ? '已启用（保存后生效）' : '已关闭（保存后生效）'}</span>
+          </Space>
+        </Form.Item>
+
+        <Form.Item label="Bearer 鉴权">
+          <Space direction="vertical" style={{ width: '100%' }} size={12}>
+            <Space align="center" wrap>
+              <Switch
+                checked={authEnabled}
+                onChange={setAuthEnabled}
+                aria-label="启用 Bearer 鉴权"
+              />
+              <span>启用后客户端须携带 Authorization: Bearer &lt;token&gt;</span>
+            </Space>
+            <Space.Compact style={{ width: '100%' }}>
+              <Input.Password
+                aria-label="MCP Auth Token"
+                value={authToken}
+                placeholder={
+                  mcp.auth.runtime_token
+                    ? '已保存浏览器 Token，点击眼睛查看；输入新值可覆盖'
+                    : '留空表示不启用鉴权；输入新 Token 或点“生成随机”'
+                }
+                autoComplete="new-password"
+                visibilityToggle={{
+                  visible: tokenVisible,
+                  onVisibleChange: (visible) => {
+                    if (visible) void revealToken()
+                    else setTokenVisible(false)
+                  },
+                }}
+                onChange={(event) => {
+                  setAuthToken(event.target.value)
+                  setTokenDirty(true)
+                }}
+              />
+              <Button
+                icon={<EyeOutlined />}
+                disabled={!mcp.auth.runtime_token}
+                onClick={() => void revealToken()}
+              >
+                查看
+              </Button>
+              <Button onClick={generateToken}>生成随机</Button>
+              <Popconfirm
+                title="清除浏览器 Token？"
+                description="清除后回退到 .env 配置；如 .env 也没有 Token，需同时关闭鉴权。"
+                okText="清除"
+                cancelText="取消"
+                onConfirm={() => clearMutation.mutate()}
+              >
+                <Button
+                  danger
+                  loading={clearMutation.isPending}
+                  disabled={!mcp.auth.runtime_token}
+                >
+                  清除
+                </Button>
+              </Popconfirm>
+            </Space.Compact>
+            {authNeedsToken && (
+              <Alert
+                type="warning"
+                showIcon
+                message="启用鉴权需要非空 Token：请填写/生成 Token，或关闭鉴权开关。"
+              />
+            )}
+          </Space>
+        </Form.Item>
+
+        <Form.Item
+          label="Allowed Hosts"
+          help="精确主机名，逗号或换行分隔，忽略端口；不支持通配/IP 段。默认仅本机回环。"
+        >
+          <Input.TextArea
+            aria-label="MCP Allowed Hosts"
+            rows={3}
+            value={hostsText}
+            onChange={(event) => setHostsText(event.target.value)}
+          />
+          <Button
+            size="small"
+            style={{ marginTop: 8 }}
+            onClick={() => setHostsText('127.0.0.1\nlocalhost\n::1')}
+          >
+            恢复本机默认
+          </Button>
+        </Form.Item>
+
+        <Form.Item
+          label="生成工具默认等待（秒）"
+          help="文章/配图工具默认等待上限；超过后返回 running，可再调用 wait_for_run 续等。"
+        >
+          <InputNumber
+            aria-label="MCP 生成工具默认等待秒数"
+            min={30}
+            max={600}
+            value={waitTimeout}
+            onChange={(value) => setWaitTimeout(Number(value ?? 180))}
+            style={{ width: 180 }}
+          />
+        </Form.Item>
+
+        <Space wrap>
+          <Button
+            type="primary"
+            htmlType="submit"
+            icon={<SaveOutlined />}
+            loading={saveMutation.isPending}
+            disabled={!dirty || authNeedsToken}
+          >
+            保存
+          </Button>
+          <Button
+            icon={<ExperimentOutlined />}
+            loading={probeMutation.isPending}
+            onClick={() => probeMutation.mutate()}
+          >
+            测试配置
+          </Button>
+          <Typography.Text type="secondary">保存即生效，无需重启后端。</Typography.Text>
+        </Space>
+      </Form>
+
+      <Card
+        type="inner"
+        title="DSH 接入片段"
+        style={{ marginTop: 20 }}
+        extra={
+          <Button
+            size="small"
+            icon={<CopyOutlined />}
+            onClick={() => void copy(dshYaml, 'DSH 配置片段')}
+          >
+            复制
+          </Button>
+        }
+      >
+        <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>
+          写入 <Typography.Text code>~/.dsh/profiles/desktop/cordis.patch.yml</Typography.Text>
+          （不自动修改）；Token 用实际值替换 <Typography.Text code>&lt;token&gt;</Typography.Text>。长文生成建议
+          <Typography.Text code>toolCallTimeoutMs</Typography.Text> 不低于 300000。
+        </Typography.Paragraph>
+        <pre className="settings-mcp-code">{dshYaml}</pre>
+      </Card>
+    </Card>
+  )
+}
+
 export default function SettingsPage() {
   const [searchParams, setSearchParams] = useSearchParams()
-  const activeTab = searchParams.get('tab') === 'wechat' ? 'wechat' : 'models'
+  const tabParam = searchParams.get('tab')
+  const activeTab = tabParam === 'wechat' ? 'wechat' : tabParam === 'mcp' ? 'mcp' : 'models'
   const query = useQuery({ queryKey: ['settings-status'], queryFn: settingsApi.getStatus })
 
   if (query.isPending) return <Skeleton active paragraph={{ rows: 12 }} />
@@ -614,7 +957,7 @@ export default function SettingsPage() {
       <div className="page-toolbar">
         <div>
           <h1 className="page-title">设置</h1>
-          <p className="settings-subtitle">管理文章模型、生图模型与微信公众号发布配置。</p>
+          <p className="settings-subtitle">管理文章模型、生图模型、微信公众号发布与 MCP 接入配置。</p>
         </div>
         <Tag>配置版本 {status.revision}</Tag>
       </div>
@@ -626,7 +969,12 @@ export default function SettingsPage() {
       />
       <Tabs
         activeKey={activeTab}
-        onChange={(key) => setSearchParams(key === 'wechat' ? { tab: 'wechat' } : {}, { replace: true })}
+        onChange={(key) =>
+          setSearchParams(
+            key === 'wechat' || key === 'mcp' ? { tab: key } : {},
+            { replace: true },
+          )
+        }
         items={[
           {
             key: 'models',
@@ -652,6 +1000,11 @@ export default function SettingsPage() {
             key: 'wechat',
             label: '公众号配置',
             children: <div className="settings-tab-stack"><WechatCard key={`wechat-${status.revision}`} status={status} /></div>,
+          },
+          {
+            key: 'mcp',
+            label: 'MCP 配置',
+            children: <div className="settings-tab-stack"><McpCard key={`mcp-${status.revision}`} status={status} /></div>,
           },
         ]}
       />

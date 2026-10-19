@@ -1798,6 +1798,36 @@ body {
   gap: 8px;
 }
 
+.settings-mcp-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  background: rgba(5, 5, 5, 0.02);
+  border: 1px solid rgba(5, 5, 5, 0.06);
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+.settings-mcp-meta-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.settings-mcp-code {
+  margin: 0;
+  padding: 12px 14px;
+  overflow: auto;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+  font-size: 12px;
+  line-height: 1.7;
+  background: rgba(5, 5, 5, 0.04);
+  border-radius: 8px;
+}
+
 @media (max-width: 960px) {
   .settings-provider-grid,
   .settings-runtime-grid {
