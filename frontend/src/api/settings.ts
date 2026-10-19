@@ -14,6 +14,15 @@ export interface ProviderUpdatePayload {
   context_window?: number
 }
 
+export interface McpUpdatePayload {
+  revision: number
+  enabled?: boolean
+  auth_enabled?: boolean
+  auth_token?: string
+  allowed_hosts?: string[]
+  wait_timeout_seconds?: number
+}
+
 export const settingsApi = {
   getStatus: () => apiRequest<SettingsStatus>('/api/settings/status'),
 
@@ -56,7 +65,22 @@ export const settingsApi = {
       body: { revision, field },
     }),
 
-  probe: (provider: SettingsProviderId | 'wechat') =>
+  updateMcp: (payload: McpUpdatePayload) =>
+    apiRequest<SettingsStatus>('/api/settings/mcp', { method: 'PATCH', body: payload }),
+
+  clearMcpToken: (revision: number) =>
+    apiRequest<SettingsStatus>('/api/settings/mcp/token', {
+      method: 'DELETE',
+      body: { revision },
+    }),
+
+  revealMcpToken: (revision: number) =>
+    apiRequest<CredentialRevealResponse>('/api/settings/mcp/token/reveal', {
+      method: 'POST',
+      body: { revision, field: 'auth_token' },
+    }),
+
+  probe: (provider: SettingsProviderId | 'wechat' | 'mcp') =>
     apiRequest<ProbeResult>(`/api/settings/probe/${provider}`, {
       method: 'POST',
       timeoutMs: provider === 'image_wanxiang' ? 190_000 : 35_000,

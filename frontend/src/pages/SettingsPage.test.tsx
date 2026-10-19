@@ -15,6 +15,9 @@ const mocks = vi.hoisted(() => ({
   updateWechat: vi.fn(),
   clearWechatCredentials: vi.fn(),
   revealWechatCredential: vi.fn(),
+  updateMcp: vi.fn(),
+  clearMcpToken: vi.fn(),
+  revealMcpToken: vi.fn(),
   probe: vi.fn(),
 }))
 
@@ -82,6 +85,24 @@ const status = {
     mcp_available: false,
     mcp_executable: null,
     publish_fake_mode: false,
+  },
+  mcp: {
+    enabled: false,
+    enabled_source: 'env' as const,
+    endpoint: 'http://127.0.0.1:8000/mcp/',
+    transport: 'streamable-http' as const,
+    tool_count: 16,
+    auth: {
+      enabled: false,
+      enabled_source: 'env' as const,
+      token_masked: null,
+      token_source: null,
+      runtime_token: false,
+    },
+    allowed_hosts: ['127.0.0.1', 'localhost', '::1'],
+    allowed_hosts_source: 'env' as const,
+    wait_timeout_seconds: 180,
+    wait_timeout_source: 'env' as const,
   },
 }
 
@@ -188,5 +209,70 @@ describe('SettingsPage', () => {
     await waitFor(() => expect(mocks.revealProviderCredential).toHaveBeenCalledWith('image_wanxiang', 2))
     expect(wanxiangInput).toHaveValue('wanxiang-runtime-secret')
     expect(wanxiangSave).toBeDisabled()
+  })
+
+  it('可切换到 MCP 配置 Tab 并展示服务状态', async () => {
+    const user = userEvent.setup()
+    renderPage()
+    await screen.findAllByText('DeepSeek')
+
+    await user.click(screen.getByRole('tab', { name: 'MCP 配置' }))
+    expect(screen.getByText('MCP 服务')).toBeInTheDocument()
+    expect(screen.getAllByText('http://127.0.0.1:8000/mcp/').length).toBeGreaterThan(0)
+    expect(screen.getByText('16 个')).toBeInTheDocument()
+    expect(screen.getByText('未配置 Bearer Token')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '生成随机' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /测试配置/ })).toBeInTheDocument()
+  })
+
+  it('查询参数可直接打开 MCP 配置', async () => {
+    renderPage('/settings?tab=mcp')
+    expect(await screen.findByText('MCP 服务')).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'MCP 配置' })).toHaveAttribute('aria-selected', 'true')
+  })
+
+  it('启用 MCP 服务后保存调用 updateMcp', async () => {
+    const user = userEvent.setup()
+    renderPage('/settings?tab=mcp')
+    await screen.findByText('MCP 服务')
+
+    await user.click(screen.getByRole('switch', { name: '启用 MCP 服务' }))
+    const dialog = await screen.findByRole('dialog')
+    await user.click(within(dialog).getByRole('button', { name: /启\s*用/ }))
+
+    const card = screen.getByText('MCP 服务').closest('.ant-card') as HTMLElement
+    const save = within(card).getByRole('button', { name: /保存/ })
+    expect(save).toBeEnabled()
+    await user.click(save)
+
+    await waitFor(() => expect(mocks.updateMcp).toHaveBeenCalledTimes(1))
+    expect(mocks.updateMcp).toHaveBeenCalledWith(
+      expect.objectContaining({
+        revision: 2,
+        enabled: true,
+        auth_enabled: false,
+        allowed_hosts: ['127.0.0.1', 'localhost', '::1'],
+        wait_timeout_seconds: 180,
+      }),
+    )
+  })
+
+  it('生成随机 Token 会自动启用鉴权并随保存提交', async () => {
+    const user = userEvent.setup()
+    renderPage('/settings?tab=mcp')
+    await screen.findByText('MCP 服务')
+
+    const card = screen.getByText('MCP 服务').closest('.ant-card') as HTMLElement
+    await user.click(within(card).getByRole('button', { name: '生成随机' }))
+    const tokenInput = within(card).getByLabelText('MCP Auth Token') as HTMLInputElement
+    const token = tokenInput.value
+    expect(token).toMatch(/^as_/)
+    expect(within(card).getByRole('switch', { name: '启用 Bearer 鉴权' })).toBeChecked()
+
+    await user.click(within(card).getByRole('button', { name: /保存/ }))
+    await waitFor(() => expect(mocks.updateMcp).toHaveBeenCalledTimes(1))
+    expect(mocks.updateMcp).toHaveBeenCalledWith(
+      expect.objectContaining({ enabled: false, auth_enabled: true, auth_token: token }),
+    )
   })
 })

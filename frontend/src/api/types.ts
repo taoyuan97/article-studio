@@ -482,6 +482,27 @@ export interface WechatSettingsStatus {
   publish_fake_mode: boolean
 }
 
+export interface McpAuthSettingsStatus {
+  enabled: boolean
+  enabled_source: 'runtime' | 'env'
+  token_masked: string | null
+  token_source: 'runtime' | 'env' | 'mixed' | null
+  runtime_token: boolean
+}
+
+export interface McpSettingsStatus {
+  enabled: boolean
+  enabled_source: 'runtime' | 'env'
+  endpoint: string
+  transport: 'streamable-http'
+  tool_count: number
+  auth: McpAuthSettingsStatus
+  allowed_hosts: string[]
+  allowed_hosts_source: 'runtime' | 'env'
+  wait_timeout_seconds: number
+  wait_timeout_source: 'runtime' | 'env'
+}
+
 export interface SettingsStatus {
   revision: number
   default_llm_provider: 'deepseek' | 'moonshot'
@@ -489,6 +510,7 @@ export interface SettingsStatus {
   providers: Record<SettingsProviderId, SettingsProviderStatus>
   runtime: SettingsRuntime
   wechat: WechatSettingsStatus
+  mcp: McpSettingsStatus
 }
 
 export interface CredentialRevealResponse {
