@@ -217,17 +217,32 @@ async def test_render_markdown_real_node_integration():
     """Real render via local node + @wenyan-md/core (skipped when not installed).
 
     Verifies preview HTML matches the publish rendering output shape:
-    a <section id="wenyan"> with inline theme styles, and that unknown
+    frontmatter is stripped/consumed like ``renderAndPublish`` (description
+    becomes a quote block, title/cover/author never leak into the body),
+    a <section id="wenyan"> with inline theme styles is returned, and unknown
     themes fail with the original core error message.
     """
     client = make_client(publish_fake_mode=True)
     if not _core_wrapper_available(client):
         pytest.skip("wenyan-mcp / @wenyan-md/core not installed locally")
 
-    html = await client.render_markdown("---\ntitle: t\n---\n\n## 标题\n\n正文", "default")
+    html = await client.render_markdown(
+        "---\n"
+        "title: t\n"
+        "cover: cover.png\n"
+        "author: a\n"
+        "description: 摘要说明\n"
+        "---\n\n"
+        "## 标题\n\n正文",
+        "default",
+    )
     assert html.startswith('<section id="wenyan"')
     assert "标题" in html
     assert "正文" in html
+    assert "摘要说明" in html
+    assert "title:" not in html
+    assert "cover:" not in html
+    assert "author:" not in html
 
     with pytest.raises(PublishError) as exc_info:
         await client.render_markdown("# t", "no-such-theme-xyz")
