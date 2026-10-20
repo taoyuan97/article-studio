@@ -333,7 +333,7 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
 - **未配置 API Key 的表现**：文章发送后出现失败卡片（脱敏详情），配图线提示无可用生图模型。请先到侧边栏“设置”完成配置；本地联调也可改用假模型服务器。
 - **E2E 浏览器下载失败/缓慢**：`$env:PLAYWRIGHT_DOWNLOAD_HOST = "https://npmmirror.com/mirrors/playwright"` 后重装。
 - **数据在哪、如何重置**：全部在 `backend\data\`（业务库 `article.sqlite3`、图片 `assets/`）；假模型数据在 `data\dev-fake\`、E2E 在 `data\e2e\`，删除对应目录即重置。
-- **发布报 40164（invalid ip）/ IP 白名单**：微信要求调用方公网 IP 在白名单内；到 mp.weixin.qq.com → 设置与开发 → 基本配置 → IP 白名单，加入当前公网 IP（家宽变动后同样处理）。详见 `docs/ops/manual-tasks-t007-t010.md`。
+- **发布报 40164（invalid ip）/ IP 白名单**：微信要求调用方公网 IP 在白名单内。发布页现在会直接显示被拒 IP 与修复步骤：到 mp.weixin.qq.com → 设置与开发 → 基本配置 → IP 白名单，加入该 IP（家宽变动后同样处理），保存后回到发布页重试。详见 [ISSUE-005](docs/issue/ISSUE-005-publish-error-ux.md)。
 - **只想体验发布流程、没有公众号**：保持 `PUBLISH_FAKE_MODE=true`，发布返回 `FAKE_MEDIA_xxx` 假 media_id，全流程（含失败重试）可正常演练。
 - **MCP 端点返回 404**：确认 `backend\.env` 已设置 `MCP_ENABLED=true` 并重启后端；MCP 关闭时 `/mcp*` 统一返回 404。
 - **MCP 端点返回 401 / 403**：401 检查 `MCP_AUTH_TOKEN` 与客户端的 `Authorization: Bearer`；403 检查 `MCP_ALLOWED_HOSTS` 是否包含访问使用的主机名。

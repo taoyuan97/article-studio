@@ -91,7 +91,7 @@ cd backend
 uv run pytest -p no:cacheprovider
 ```
 
-预期：`163 passed`（2 条既有依赖告警，不影响；含 MCP 设置页 API 与预览 frontmatter 回归用例）。
+预期：`174 passed`（2 条既有依赖告警，不影响；含 MCP 设置页 API、预览 frontmatter 与发布错误分类用例）。
 
 > 已知环境抖动：`test_wenyan_client.py::test_render_markdown_real_node_integration` 依赖 node 冷启动，机器负载高时可能超过 30s 超时导致全量偶发 1 条失败；单跑该用例复跑可稳定通过，属环境抖动而非功能缺陷。若遇到，先单跑复验再判定 AT-03。
 
@@ -112,6 +112,17 @@ uv run pytest tests/test_wenyan_client.py tests/test_wenyan_render_script.py -p 
 ```
 
 预期：全部通过。覆盖真实 core 预览「frontmatter 不进入正文 + description 引用块」，以及 fake wrapper 断言预览脚本走 `prepareRenderContext`、`image_list`/旧 core 明确报错。
+
+### AT-06 发布失败分类与提示（ISSUE-005）
+
+```powershell
+cd backend
+uv run pytest tests/test_wenyan_client.py tests/test_publish_service.py -p no:cacheprovider -q
+cd ..\frontend
+pnpm exec vitest run src/features/publish/publishFailure.test.ts src/pages/PublishPage.test.tsx
+```
+
+预期：全部通过。覆盖 40164/40125/40001/40013/48001/45009/40007/封面/未知错误的分类，以及前端 IP/`::ffff`/rid 提取、旧 `PUBLISH_MCP_ERROR` 兼容与失败面板交互。
 
 ## 4. 手工验收用例
 
@@ -162,7 +173,7 @@ uv run pytest tests/test_wenyan_client.py tests/test_wenyan_render_script.py -p 
 | 编号 | 前置 | 操作步骤 | 预期结果 |
 |---|---|---|---|
 | MT-20 | fake 环境（有 1 张图） | 调 `publish_article(article_id, theme_id="default", image_placements=[...], cover_asset_id=...)` | 返回 `media_id="FAKE_MEDIA_..."`、`status="succeeded"`、`draft_only=true`；网页发布记录出现成功记录与快照 |
-| MT-21 | fake 环境 | 发布一段用户消息含「触发发布失败」生成的文章 | 返回 `PUBLISH_MCP_ERROR`；发布记录为 `failed`，含错误码/信息，可展开查看 |
+| MT-21 | fake 环境 | 发布一段用户消息含「触发发布失败」生成的文章 | `publish_article` 返回 `PUBLISH_IP_NOT_WHITELIST`；网页显示「IP 白名单」标题、模拟 IP `203.0.113.10`、修复步骤与重试按钮；发布记录为 `failed` 且可展开同一提示 |
 | MT-22 | 清空 `WECHAT_APP_ID/SECRET` 并重启（或直接调真实环境缺凭据） | 调 `publish_article` | 返回 `PUBLISH_CREDENTIALS_MISSING`，不发起微信请求 |
 | MT-23 | 真实环境（凭据 + IP 白名单 + 非 fake） | 用真实公众号发布一篇含封面与插图的文章 | 公众号草稿箱出现草稿；标题、封面、正文插图与主题预览一致；**只建草稿未群发** |
 
@@ -172,7 +183,7 @@ uv run pytest tests/test_wenyan_client.py tests/test_wenyan_render_script.py -p 
 |---|---|---|---|
 | MT-24 | MT-07 / MT-13 / MT-20 | 网页打开文章工作台、素材库、发布记录、快照详情 | 版本/消息、素材、发布记录、内容快照均与 MCP 返回一致 |
 | MT-25 | fake 环境 | `GET /api/articles`、`/api/assets`、`/api/publish/records` | 返回 MCP 产出的数据；无 500 |
-| MT-26 | 无改动代码 | `cd backend; uv run pytest -p no:cacheprovider`；`cd frontend; pnpm test; pnpm lint; pnpm build` | 后端 150 passed；前端测试/lint/build 通过 |
+| MT-26 | 无改动代码 | `cd backend; uv run pytest -p no:cacheprovider`；`cd frontend; pnpm test; pnpm lint; pnpm build` | 后端 174 passed；前端测试/lint/build 通过 |
 | MT-27 | 默认关闭 MCP 启动真实后端 | 访问 `/api/health` 与网页主路径 | REST/网页正常；`/mcp/` 404（默认不暴露） |
 
 ### G. MCP 设置页（2026-10-19 新增）
@@ -188,11 +199,18 @@ uv run pytest tests/test_wenyan_client.py tests/test_wenyan_render_script.py -p 
 | MT-34 | MT-28 | 查看并复制 DSH YAML 片段 | 片段含端点、`toolCallTimeoutMs`（鉴权开启时含 `Authorization` 占位）；复制成功；不会自动修改 `~/.dsh` |
 | MT-35 | MT-28 | 点击「测试配置」 | 配置级返回（开启状态、16 工具、鉴权状态），不发起真实网络请求/不校验 Token 有效性 |
 
+### H. 发布失败提示（ISSUE-005，2026-10-20 新增）
+
+| 编号 | 前置 | 操作步骤 | 预期结果 |
+|---|---|---|---|
+| MT-36 | fake 环境，正文含「触发发布失败」 | 发布到草稿箱 | 首屏标题为「公众号 IP 白名单未包含当前出口 IP」，展示模拟 IP `203.0.113.10`、修复步骤、重试/复制诊断/打开公众平台按钮；技术详情含 `PUBLISH_IP_NOT_WHITELIST`、`40164`、`rid`；发布记录展开一致 |
+| MT-37 | 真实环境（触发 40164） | 发布到草稿箱 | 展示被微信拒绝的真实 IP 与白名单添加步骤；复制诊断信息包含错误码/IP/rid/原始文本；添加白名单后重试成功 |
+
 ## 5. 验收执行记录
 
 | 用例 | 结果（通过/不通过） | 证据 / 现象 | 执行人 | 日期 |
 |---|---|---|---|---|
-| AT-01 ~ AT-05 |  |  |  |  |
+| AT-01 ~ AT-06 |  |  |  |  |
 | MT-01 ~ MT-05 |  |  |  |  |
 | MT-06 ~ MT-12 |  |  |  |  |
 | MT-13 ~ MT-15b |  |  |  |  |
@@ -200,6 +218,7 @@ uv run pytest tests/test_wenyan_client.py tests/test_wenyan_render_script.py -p 
 | MT-20 ~ MT-23 |  |  |  |  |
 | MT-24 ~ MT-27 |  |  |  |  |
 | MT-28 ~ MT-35 |  |  |  |  |
+| MT-36 ~ MT-37 |  |  |  |  |
 
 **验收结论**：☐ 通过（可合并 `feature/T021-article-studio-mcp` 到 `main`）　☐ 不通过（需返工，问题记录：）
 
@@ -208,7 +227,7 @@ uv run pytest tests/test_wenyan_client.py tests/test_wenyan_render_script.py -p 
 ## 6. 通过判据
 
 - §3 自动化用例全部通过（AI 已跑）。
-- §4 手工用例 MT-01 ~ MT-22、MT-24 ~ MT-35 通过；MT-23（真实公众号草稿）可单独确认是否本次执行。
+- §4 手工用例 MT-01 ~ MT-22、MT-24 ~ MT-37 通过；MT-23（真实公众号草稿）与 MT-37 可单独确认是否本次执行。
 - 无密钥/凭据出现在工具返回、日志、错误信息或发布记录中。
 - MCP 关闭时 REST/网页行为不变；开启时网页可见 MCP 产物。
 - 验收记录与结论已填写。

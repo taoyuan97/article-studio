@@ -206,7 +206,7 @@ GET    /api/publish/records?article_id=             发布记录列表（时间�
 GET    /api/publish/records/{record_id}             发布记录详情（含 content_snapshot）
 ```
 
-发布线错误为结构化 `{code, message}`（如 `PUBLISH_CREDENTIALS_MISSING` / `PUBLISH_MCP_NOT_INSTALLED` / `PUBLISH_MCP_ERROR`（40164 等）/ `PUBLISH_TIMEOUT` / `PUBLISH_ASSET_MISSING`），失败同样落 `publish_records`（status=failed + 错误码/信息）供回看与排障。
+发布线错误为结构化 `{code, message}`：基础码（`PUBLISH_CREDENTIALS_MISSING` / `PUBLISH_MCP_NOT_INSTALLED` / `PUBLISH_TIMEOUT` / `PUBLISH_ASSET_MISSING` 等）+ 微信错误分类码（`PUBLISH_IP_NOT_WHITELIST` / `PUBLISH_CREDENTIALS_INVALID` / `PUBLISH_API_UNAUTHORIZED` / `PUBLISH_RATE_LIMITED` / `PUBLISH_COVER_REQUIRED` / `PUBLISH_MEDIA_INVALID`），无法识别时保留 `PUBLISH_MCP_ERROR` 与完整原文；失败同样落 `publish_records`（status=failed + 错误码/信息）供回看与排障。前端统一由 `features/publish/publishFailure.ts` 解释为原因、修复步骤与诊断信息（见 ISSUE-005）。
 
 run 响应结构（两条线同构）：
 
