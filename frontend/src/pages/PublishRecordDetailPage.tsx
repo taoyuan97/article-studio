@@ -6,7 +6,7 @@ import { assetsApi } from '../api/assets'
 import { publishApi } from '../api/publish'
 import type { ApiError } from '../api/client'
 import MarkdownView from '../components/MarkdownView'
-import StatusBanner from '../components/StatusBanner'
+import PublishFailurePanel from '../features/publish/PublishFailurePanel'
 import { mapImagePathsToUrls, stripFrontmatter } from '../features/publish/snapshot'
 import { formatDate, resolveImageUrl } from '../lib/format'
 
@@ -77,10 +77,10 @@ export default function PublishRecordDetailPage() {
       </div>
 
       {record.status === 'failed' && (
-        <StatusBanner
-          kind="error"
+        <PublishFailurePanel
+          code={record.error_code}
           message={record.error_message ?? '发布失败'}
-          description={`错误码：${record.error_code ?? 'UNKNOWN'}`}
+          showRecordsLink={false}
         />
       )}
 

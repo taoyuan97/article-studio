@@ -1,12 +1,12 @@
 # T021：Article Studio MCP Server（本地智能体接入）
 
-> **状态**：`WAIT_ACCEPTANCE`（原 MCP 需求 + 2026-10-19 MCP 设置页追加需求均已完成 AI 自测，待人工验收）
-> **分支**：`feature/T021-article-studio-mcp`（按 D20 直接堆叠）
+> **状态**：`DONE`（2026-10-20 已按人工确认 Squash 合并到 main）
+> **分支**：`feature/T021-article-studio-mcp`（已合并并删除）
 > **版本归属**：下一版本（建议 v1.1.0，验收通过后由人工打 tag）
 
 ## 1. 任务信息
 
-- 状态：`WAIT_ACCEPTANCE`（原 MCP 需求 AI 自测通过；2026-10-19 设置页追加需求已实现并自测）
+- 状态：`DONE`（原 MCP 需求 + 设置页追加需求已合并；2026-10-20）
 - 优先级：P1
 - 类型：MCP Server / 本地智能体集成
 - 前置任务：T003（文章线）、T004（配图线）、T007–T010（公众号发布）、T015（配图计划）、T018（设置与运行态配置）
@@ -328,7 +328,7 @@ MCP 参数此前只能手改 `backend/.env` 并重启，且存在确认缺陷：
 - [x] [AI] MCP 关闭时 `/mcp*` 404；开启时 selftest 16 工具通过。
 - [x] [AI] `.env.bak` 不再被 git 跟踪；docs/mcp 的 DSH/CWD/401 指引可直接执行。
 - [x] [AI] 后端全量 pytest、前端 test/lint/build 通过。
-- [ ] [人工] 浏览器完成一次开启→配置 Token→客户端接入→关闭的完整流程；网页与客户端结果一致。
+- [x] [人工] 浏览器完成一次开启→配置 Token→客户端接入→关闭的完整流程；网页与客户端结果一致。
 
 ### 14.6 实施与自测记录（2026-10-19）
 
@@ -345,3 +345,4 @@ MCP 参数此前只能手改 `backend/.env` 并重启，且存在确认缺陷：
 - 2026-10-18 开发完成并自测：新增 `app/mcp/` 16 工具、守卫中间件、定稿导入；全量 pytest 150 passed；fake 全链路冒烟通过；状态置 `WAIT_ACCEPTANCE`。
 - 2026-10-19 追加需求：按 D11–D22 在 T021 内实现「MCP 配置设置页」（settings.json 覆盖 + 热生效 + 显式鉴权开关 + 配置级自检），并修复空 Token 语义、`.env.bak` 忽略与 DSH/CWD/401 文档；状态回到 `CODING`。
 - 2026-10-19 追加需求自测完成：后端 159 passed、前端 114 passed/lint/build 通过；fake 服务实测开关/Token/Hosts 热生效；状态置 `WAIT_ACCEPTANCE`，等待人工浏览器与客户端验收。
+- 2026-10-20 人工确认合并：PR #2 Squash 合并到 `main`（`44456aa`），删除本地/远程 `feature/T021-article-studio-mcp`；任务状态置 `DONE`。合并后新增 ISSUE-004（预览 frontmatter）修复与 ISSUE-005（发布失败提示）在独立 fix 分支处理。

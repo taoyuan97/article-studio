@@ -12,7 +12,7 @@ import StatusBanner from '../components/StatusBanner'
 import CoverPickerModal from '../features/publish/CoverPickerModal'
 import ImagePlacementEditor from '../features/publish/ImagePlacementEditor'
 import ThemePreviewPanel from '../features/publish/ThemePreviewPanel'
-import { publishErrorText } from '../features/publish/errorText'
+import PublishFailurePanel from '../features/publish/PublishFailurePanel'
 import { sanitizePlacements } from '../features/publish/placements'
 import { resolveImageUrl } from '../lib/format'
 
@@ -316,11 +316,6 @@ export default function PublishPage() {
               发布到公众号草稿箱
             </Button>
           )}
-          {step === 2 && publishPhase.status === 'failed' && (
-            <Button onClick={executePublish} disabled={publishing}>
-              重试发布
-            </Button>
-          )}
         </Space>
       </div>
 
@@ -505,27 +500,10 @@ export default function PublishPage() {
                 }
               />
             ) : publishPhase.status === 'failed' ? (
-              <Alert
-                type="error"
-                showIcon
-                className="publish-result"
-                message="发布失败"
-                description={
-                  <div className="publish-failure-body">
-                    <p>{publishErrorText(publishPhase.errorCode, publishPhase.errorMessage)}</p>
-                    {publishPhase.errorCode === 'PUBLISH_MCP_ERROR' &&
-                    publishPhase.errorMessage ? (
-                      <p className="publish-failure-detail">
-                        详情：{publishPhase.errorMessage}
-                      </p>
-                    ) : null}
-                    {publishPhase.errorCode && (
-                      <p>
-                        错误码：<code>{publishPhase.errorCode}</code>
-                      </p>
-                    )}
-                  </div>
-                }
+              <PublishFailurePanel
+                code={publishPhase.errorCode}
+                message={publishPhase.errorMessage}
+                onRetry={() => void executePublish()}
               />
             ) : null}
           </section>
