@@ -9,6 +9,7 @@ from app.wenyan_client import (
     FAKE_BUILTIN_THEMES,
     PublishError,
     WenyanMcpClient,
+    classify_publish_failure,
     extract_media_id,
 )
 from article_agent.config import Settings
@@ -128,8 +129,29 @@ async def test_fake_publish_failure_marker_raises_mcp_error(tmp_path):
     markdown.write_text("---\ntitle: t\n---\n\n正文\n\n触发发布失败\n", encoding="utf-8")
     with pytest.raises(PublishError) as exc_info:
         await client.publish_article(str(markdown), "default")
-    assert exc_info.value.code == "PUBLISH_MCP_ERROR"
+    assert exc_info.value.code == "PUBLISH_IP_NOT_WHITELIST"
     assert "40164" in exc_info.value.message
+    assert "203.0.113.10" in exc_info.value.message
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("执行工具失败: 40164: invalid ip 120.85.124.127 rid: abc", "PUBLISH_IP_NOT_WHITELIST"),
+        ("执行工具失败: 40125 invalid appsecret", "PUBLISH_CREDENTIALS_INVALID"),
+        ("执行工具失败: 40001 invalid credential", "PUBLISH_CREDENTIALS_INVALID"),
+        ("执行工具失败: 40013 invalid appid", "PUBLISH_CREDENTIALS_INVALID"),
+        ("执行工具失败: 48001 api unauthorized", "PUBLISH_API_UNAUTHORIZED"),
+        ("执行工具失败: 45009 api freq limit", "PUBLISH_RATE_LIMITED"),
+        ("执行工具失败: 40007 invalid media_id", "PUBLISH_MEDIA_INVALID"),
+        ("执行工具失败: thumb_media_id is required", "PUBLISH_COVER_REQUIRED"),
+        ("执行工具失败: 公众号要求封面或正文至少一张图", "PUBLISH_COVER_REQUIRED"),
+        ("执行工具失败: 99999 unknown upstream error", "PUBLISH_MCP_ERROR"),
+        ("wenyan-mcp 调用失败：connection reset", "PUBLISH_MCP_ERROR"),
+    ],
+)
+def test_classify_publish_failure(text, expected):
+    assert classify_publish_failure(text) == expected
 
 
 def test_extract_media_id_from_real_message_format():

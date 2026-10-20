@@ -672,7 +672,7 @@ async def test_publish_success_writes_record_with_fake_media_id(api):
 
 
 async def test_publish_failure_marker_writes_failed_record(api):
-    # 正文含「触发发布失败」→ fake 模式抛 PUBLISH_MCP_ERROR（502），落失败记录
+    # 正文含「触发发布失败」→ fake 模式抛 PUBLISH_IP_NOT_WHITELIST（422），落失败记录
     application, client, tmp_path = api
     article, _ = await make_article_with_version(
         api, content="导语\n\n## 一\n正文一\n\n触发发布失败\n"
@@ -681,15 +681,16 @@ async def test_publish_failure_marker_writes_failed_record(api):
     response = await client.post(f"/api/publish/articles/{article['id']}", json={
         "theme_id": "default",
     })
-    assert response.status_code == 502, response.text
-    assert response.json()["error"]["code"] == "PUBLISH_MCP_ERROR"
+    assert response.status_code == 422, response.text
+    assert response.json()["error"]["code"] == "PUBLISH_IP_NOT_WHITELIST"
 
     records = (await client.get(f"/api/publish/records?article_id={article['id']}")).json()["items"]
     assert len(records) == 1
     record = records[0]
     assert record["status"] == "failed"
-    assert record["error_code"] == "PUBLISH_MCP_ERROR"
+    assert record["error_code"] == "PUBLISH_IP_NOT_WHITELIST"
     assert "40164" in record["error_message"]
+    assert "203.0.113.10" in record["error_message"]
     assert record["media_id"] is None
     # 失败也保留快照且不留临时文件
     assert record["content_snapshot"].startswith("---\n")

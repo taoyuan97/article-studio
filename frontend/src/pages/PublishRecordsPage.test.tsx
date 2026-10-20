@@ -132,7 +132,10 @@ describe('PublishRecordsPage', () => {
 
     await user.click(screen.getByRole('button', { name: 'Expand row' }))
     expect(await screen.findByText(/40164 invalid ip/)).toBeInTheDocument()
-    expect(screen.getByText('PUBLISH_MCP_ERROR')).toBeInTheDocument()
+    expect(
+      screen.getByText(/公众号 IP 白名单未包含当前出口 IP/),
+    ).toBeInTheDocument()
+    expect(screen.getByText('PUBLISH_IP_NOT_WHITELIST')).toBeInTheDocument()
   })
 
   it('空态：引导从文章工作台发布第一篇文章', async () => {

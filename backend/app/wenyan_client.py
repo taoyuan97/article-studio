@@ -45,6 +45,51 @@ _TOOL_FAILURE_MARKER = "执行工具失败"
 # tests can exercise the failed-publish path (record + retry) without real
 # WeChat credentials. See scripts/dev_fake_server.py.
 FAKE_PUBLISH_FAILURE_MARKER = "触发发布失败"
+FAKE_PUBLISH_ERROR_TEXT = (
+    "fake 模式：正文包含「触发发布失败」，模拟公众号接口失败"
+    "（40164: invalid ip 203.0.113.10 rid: fake-rid）"
+)
+
+# Known WeChat error codes embedded in wenyan-mcp tool failure text.
+# Unknown codes keep PUBLISH_MCP_ERROR so the raw diagnostics stay visible.
+WECHAT_PUBLISH_ERROR_CODES: dict[str, str] = {
+    "40164": "PUBLISH_IP_NOT_WHITELIST",
+    "40125": "PUBLISH_CREDENTIALS_INVALID",
+    "40001": "PUBLISH_CREDENTIALS_INVALID",
+    "40013": "PUBLISH_CREDENTIALS_INVALID",
+    "48001": "PUBLISH_API_UNAUTHORIZED",
+    "45009": "PUBLISH_RATE_LIMITED",
+    "40007": "PUBLISH_MEDIA_INVALID",
+    "40009": "PUBLISH_MEDIA_INVALID",
+    "40006": "PUBLISH_MEDIA_INVALID",
+}
+
+
+def classify_publish_failure(text: str) -> str:
+    """Map a wenyan-mcp publish failure text to a user-actionable code."""
+
+    for code, mapped in WECHAT_PUBLISH_ERROR_CODES.items():
+        if re.search(rf"(?<!\d){re.escape(code)}(?!\d)", text):
+            return mapped
+    lowered = text.lower()
+    if "invalid ip" in lowered or "ip whitelist" in lowered:
+        return "PUBLISH_IP_NOT_WHITELIST"
+    if (
+        "invalid appsecret" in lowered
+        or "invalid credential" in lowered
+        or "access_token" in lowered
+    ):
+        return "PUBLISH_CREDENTIALS_INVALID"
+    if "api unauthorized" in lowered:
+        return "PUBLISH_API_UNAUTHORIZED"
+    if "freq limit" in lowered or "frequency" in lowered or "rate limit" in lowered:
+        return "PUBLISH_RATE_LIMITED"
+    if "thumb_media_id" in lowered or "cover" in lowered or "封面" in text:
+        return "PUBLISH_COVER_REQUIRED"
+    if "media" in lowered or "image size" in lowered or "图片" in text:
+        return "PUBLISH_MEDIA_INVALID"
+    return "PUBLISH_MCP_ERROR"
+
 
 
 class PublishError(Exception):
@@ -287,9 +332,8 @@ class WenyanMcpClient:
                 encoding="utf-8"
             ):
                 raise PublishError(
-                    "PUBLISH_MCP_ERROR",
-                    "fake 模式：正文包含「触发发布失败」，模拟公众号接口失败"
-                    "（40164 invalid ip）。",
+                    classify_publish_failure(FAKE_PUBLISH_ERROR_TEXT),
+                    FAKE_PUBLISH_ERROR_TEXT,
                 )
             return f"FAKE_MEDIA_{uuid.uuid4().hex[:8]}"
         texts = await self._call_tool(
@@ -298,7 +342,7 @@ class WenyanMcpClient:
         )
         text = "\n".join(texts)
         if _TOOL_FAILURE_MARKER in text:
-            raise PublishError("PUBLISH_MCP_ERROR", text)
+            raise PublishError(classify_publish_failure(text), text)
         media_id = extract_media_id(text)
         if media_id is None:
             raise PublishError(

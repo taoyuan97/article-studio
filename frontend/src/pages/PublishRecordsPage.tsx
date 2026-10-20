@@ -8,6 +8,7 @@ import { publishApi } from '../api/publish'
 import type { ApiError } from '../api/client'
 import type { PublishRecord } from '../api/types'
 import StatusBanner from '../components/StatusBanner'
+import PublishFailurePanel from '../features/publish/PublishFailurePanel'
 import { formatDate } from '../lib/format'
 
 type StatusFilter = '全部' | '成功' | '失败'
@@ -145,10 +146,11 @@ export default function PublishRecordsPage() {
             rowExpandable: (record) => record.status === 'failed',
             expandedRowRender: (record) => (
               <div className="publish-record-error">
-                <p>
-                  错误码：<code>{record.error_code ?? 'UNKNOWN'}</code>
-                </p>
-                {record.error_message && <p>错误信息：{record.error_message}</p>}
+                <PublishFailurePanel
+                  code={record.error_code}
+                  message={record.error_message ?? '发布失败'}
+                  showRecordsLink={false}
+                />
               </div>
             ),
           }}

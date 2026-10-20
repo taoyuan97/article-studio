@@ -181,7 +181,8 @@ test.describe('发布线场景', () => {
   })
 
   test('校验路径：未选主题禁用发布；发布失败展示错误可重试', async ({ page }) => {
-    // 消息含触发词 → 假模型把「触发发布失败」嵌入正文，fake 发布据此抛 PUBLISH_MCP_ERROR
+    // 消息含触发词 → 假模型把「触发发布失败」嵌入正文，fake 发布据此抛
+    // PUBLISH_IP_NOT_WHITELIST（模拟 40164）
     const articleId = await createArticleViaApi(page)
     await sendViaApiAndAwaitVersion(page, articleId, '写一篇短文，触发发布失败', 1)
 
@@ -204,10 +205,9 @@ test.describe('发布线场景', () => {
     await publishButton.click()
     await page.getByRole('dialog').getByRole('button', { name: '确认发布' }).click()
 
-    await expect(page.getByText('发布失败', { exact: true })).toBeVisible()
-    await expect(page.locator('.publish-failure-body code')).toHaveText('PUBLISH_MCP_ERROR')
-    // 泛化文案与详情段均含 40164，断言详情段透出原始错误
-    await expect(page.locator('.publish-failure-detail')).toContainText('40164')
+    await expect(page.getByText(/公众号 IP 白名单未包含当前出口 IP/)).toBeVisible()
+    await expect(page.locator('.publish-failure-body')).toContainText('203.0.113.10')
+    await expect(page.locator('.publish-failure-body')).toContainText('PUBLISH_IP_NOT_WHITELIST')
     await expect(page.getByRole('button', { name: RETRY_BUTTON })).toBeEnabled()
 
     // 发布记录：失败记录可展开错误码与错误信息（antd 中文 locale 展开按钮为「展开行」）
@@ -215,8 +215,8 @@ test.describe('发布线场景', () => {
     await expect(page.locator('.ant-tag-error').first()).toContainText('失败')
     const failedRow = page.locator('tr', { has: page.locator('.ant-tag-error') })
     await failedRow.getByRole('button', { name: '展开行' }).click()
-    await expect(page.locator('.publish-record-error')).toContainText('PUBLISH_MCP_ERROR')
-    await expect(page.locator('.publish-record-error')).toContainText('错误信息：')
+    await expect(page.locator('.publish-record-error')).toContainText('PUBLISH_IP_NOT_WHITELIST')
+    await expect(page.locator('.publish-record-error')).toContainText('203.0.113.10')
 
     // 状态筛选（本地 Segmented，input 为视觉隐藏，点击 label 项）
     await page.locator('.ant-segmented-item', { hasText: '成功' }).click()

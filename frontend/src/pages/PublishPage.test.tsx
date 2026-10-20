@@ -707,9 +707,11 @@ describe('PublishPage 三步向导', () => {
   })
 
   it('发布失败：按错误码展示映射文案并可重试', async () => {
+    const rawError =
+      '执行工具失败: 40164: invalid ip 120.85.124.127, not in whitelist rid: 6ad64346-7b905a56-63b1f38f'
     publishArticle
       .mockRejectedValueOnce(
-        new ApiError('wenyan 调用失败：40164 invalid ip', 502, 'PUBLISH_MCP_ERROR'),
+        new ApiError(rawError, 422, 'PUBLISH_IP_NOT_WHITELIST'),
       )
       .mockResolvedValueOnce({
         publish_id: 'rec-2',
@@ -724,9 +726,12 @@ describe('PublishPage 三步向导', () => {
     await user.click(screen.getByRole('button', { name: '发布到公众号草稿箱' }))
     await user.click(await screen.findByRole('button', { name: '确认发布' }))
 
-    expect(await screen.findByText('发布失败')).toBeInTheDocument()
-    expect(screen.getByText(/IP 不在白名单/)).toBeInTheDocument()
-    expect(screen.getByText('PUBLISH_MCP_ERROR')).toBeInTheDocument()
+    expect(
+      await screen.findByText(/公众号 IP 白名单未包含当前出口 IP/),
+    ).toBeInTheDocument()
+    expect(screen.getAllByText(/120\.85\.124\.127/).length).toBeGreaterThan(0)
+    expect(screen.getByText('PUBLISH_IP_NOT_WHITELIST')).toBeInTheDocument()
+    expect(screen.getByText('复制诊断信息')).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: '重试发布' }))
     expect(await screen.findByText('已发布到公众号草稿箱')).toBeInTheDocument()

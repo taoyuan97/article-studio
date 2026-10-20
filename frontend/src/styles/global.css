@@ -1674,6 +1674,46 @@ body {
   margin-top: 4px;
 }
 
+.publish-failure-body p {
+  margin: 0 0 8px;
+}
+
+.publish-failure-steps {
+  margin: 8px 0 12px;
+  padding-left: 20px;
+}
+
+.publish-failure-steps li {
+  margin: 4px 0;
+}
+
+.publish-failure-actions {
+  margin-bottom: 10px;
+}
+
+.publish-failure-technical {
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+.publish-failure-technical summary {
+  cursor: pointer;
+  color: rgba(5, 5, 5, 0.55);
+}
+
+.publish-failure-technical pre {
+  margin: 8px 0;
+  padding: 10px 12px;
+  overflow: auto;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: rgba(5, 5, 5, 0.04);
+  border-radius: 6px;
+}
+
 /* ---------- 发布记录与快照 ---------- */
 
 .publish-record-error {
